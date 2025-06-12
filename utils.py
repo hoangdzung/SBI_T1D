@@ -7,6 +7,7 @@ from py_replay_bg.data import ReplayBGData
 
 import pandas as pd 
 import numpy as np 
+from scipy.stats import wasserstein_distance
 
 N_PARAMS=9
 N_PARAMS_HAT=18
@@ -129,14 +130,18 @@ def simulate_one(args):
             theta = theta_np
         all_states, cgm = model.sbi_simulate(rbg_data, x0, theta)
     except Exception as e:
-        print(e)
         all_states, cgm = None, None
         
     return all_states, cgm
 
-def get_model_and_rbg_data(data_path, patient_info_path):
+def get_model_and_rbg_data(data_path, patient_info_path, glucose_sequence=None, cho=None):
     data = pd.read_csv(data_path)
     data.t = pd.to_datetime(data['t'])
+    if glucose_sequence is not None:
+        common_len = min(len(data['glucose']), len(glucose_sequence))
+        data['glucose'].values[:common_len] = glucose_sequence[:common_len]
+    if cho is not None:
+        data.cho = cho
     patient_info = pd.read_csv(patient_info_path)
     p = np.where(patient_info['patient'] == 1)[0][0]
     bw = float(patient_info.bw.values[p])
@@ -147,3 +152,33 @@ def get_model_and_rbg_data(data_path, patient_info_path):
     model = T1DModelSingleMeal(data=data, bw=bw, u2ss=u2ss, environment=env)
     rbg_data = ReplayBGData(data=data, model=model, environment=env)
     return model, rbg_data
+
+
+def print_summary(name, mard_med, rmsd_med):
+    print(f"{name} MARD: {np.mean(mard_med) * 100:.02f} ± {np.std(mard_med)*100:.02f}%, "
+          f"RMSD: {np.mean(rmsd_med):.02f} ± {np.std(rmsd_med):.02f}")
+
+def compute_cgm_metrics(pred_median, true_x):
+    mard = np.mean(np.abs((pred_median - true_x) / true_x))
+    rmsd = np.sqrt(np.mean((pred_median - true_x) ** 2))
+    return mard, rmsd
+
+def coverage(samples, true_val, lower=2.5, upper=97.5):
+    """Check if true_val lies within the credible interval."""
+    lower_bound = np.percentile(samples, lower)
+    upper_bound = np.percentile(samples, upper)
+    return lower_bound <= true_val <= upper_bound
+
+def compute_params_metrics(samples, true_val):
+    """
+    Compute:
+    - abs(median - true)
+    - wasserstein distance
+    - coverage
+    """
+    samples = np.asarray(samples)
+    median_est = np.median(samples)
+    abs_err_median = abs(median_est - true_val)
+    wd = wasserstein_distance(samples, [true_val])
+    cov = coverage(samples, true_val)
+    return [abs_err_median, wd, cov]
