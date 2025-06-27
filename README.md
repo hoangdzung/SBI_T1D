@@ -61,7 +61,9 @@ python baseline.py --index {idx} --method {method} --test_data {test_data} [--fi
 -   `idx`: Integer from `0` to `49` (index of test sample)
 -   `method`: One of `map` or `mcmc`
 -   `test_data`: Path to test dataset (`./data/simulated/test_data.pt` or precomputed file)
-    
+
+
+This will save results at `./results`. Without running the baselines, one can use the provided baseline results at `./results`, which is used to report in the paper.
 
 ----------
 
@@ -71,7 +73,7 @@ python baseline.py --index {idx} --method {method} --test_data {test_data} [--fi
 python train_sbi.py --train_data {train_data} --output_path ./trained_models/density_estimator.pt [--fixed_beta]
 ```
 -   `train_data`: Path to training dataset (`./data/simulated/train_data.pt` or precomputed file)
--   `output_path`: Path to save the trained model . A pretrained model is also available at `./trained_models/pretrained_density_estimator.pt`
+-   `output_path`: Path to save the trained model. A pretrained model is also available at `./trained_models/pretrained_density_estimator.pt`
     
 
 ----------
