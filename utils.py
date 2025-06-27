@@ -12,11 +12,15 @@ from scipy.stats import wasserstein_distance
 N_PARAMS=9
 N_PARAMS_HAT=18
 class CustomPrior:
-    def __init__(self, model, rbg_data, device):
+    def __init__(self, model, rbg_data, device, fixed_beta=False):
         self.device = device
         self.model = model
         self.rbg_data = rbg_data
         self.n_params = N_PARAMS
+        self.fixed_beta = fixed_beta
+        if fixed_beta:
+            self.n_params -= 1
+            
         self.VG = torch.tensor(model.model_parameters.VG, device=self.device)
 
         # Distributions
@@ -73,9 +77,12 @@ class CustomPrior:
 
         kempt = self.truncated_lognormal(-1.9646, 0.7069, low=1e-5, high=1.0, size=(n_samples,))
         kabs = self.truncated_lognormal(-5.4591, 1.4396, low=1e-6, high=kempt.min().item(), size=(n_samples,))
-        beta = torch.rand(n_samples, device=self.device) * 60
-
-        theta = torch.stack([Gb, SG, p2, ka2, kd, kempt, SI, kabs, beta], dim=1)
+        
+        if self.fixed_beta:
+            theta = torch.stack([Gb, SG, p2, ka2, kd, kempt, SI, kabs], dim=1)
+        else:
+            beta = torch.rand(n_samples, device=self.device) * 60
+            theta = torch.stack([Gb, SG, p2, ka2, kd, kempt, SI, kabs, beta], dim=1)
 
         # Sample x0s
         x0s = np.array([self.model.sample_x0(self.rbg_data, t.cpu().numpy()) for t in theta])
@@ -92,8 +99,11 @@ class CustomPrior:
 
         # If any x0 values are negative, assign -inf
         mask_invalid = (x0 < 0).any(dim=1)
+        if self.fixed_beta:
+            Gb, SG, p2, ka2, kd, kempt, SI, kabs = theta.unbind(dim=1)
+        else:
+            Gb, SG, p2, ka2, kd, kempt, SI, kabs, beta = theta.unbind(dim=1)
 
-        Gb, SG, p2, ka2, kd, kempt, SI, kabs, beta = theta.unbind(dim=1)
         log_prob = torch.zeros(samples.shape[0], device=self.device)
 
         log_prob += self.gamma_SI.log_prob(SI * self.VG) + torch.log(self.VG)
@@ -115,26 +125,27 @@ class CustomPrior:
         return log_prob
     
     
-def get_prior(model: T1DModelSingleMeal, rbg_data: ReplayBGData, device = torch.device('cpu')) -> CustomPrior:
-    custom_prior = CustomPrior(model=model, rbg_data=rbg_data, device=device)
+def get_prior(model: T1DModelSingleMeal, rbg_data: ReplayBGData, device = torch.device('cpu'), fixed_beta=False) -> CustomPrior:
+    custom_prior = CustomPrior(model=model, rbg_data=rbg_data, device=device, fixed_beta=fixed_beta)
     return custom_prior
 
 def simulate_one(args):
     theta_np, model, rbg_data = args
     try:
-        if len(theta_np) == N_PARAMS_HAT:
-            x0 = theta_np[N_PARAMS:]
-            theta = theta_np[:N_PARAMS]
+        if len(theta_np) > N_PARAMS:
+            x0 = theta_np[-N_PARAMS:]
+            theta = theta_np[:-N_PARAMS]
         else:
             x0 = None
             theta = theta_np
         all_states, cgm = model.sbi_simulate(rbg_data, x0, theta)
     except Exception as e:
+        print(e)
         all_states, cgm = None, None
         
     return all_states, cgm
 
-def get_model_and_rbg_data(data_path, patient_info_path, glucose_sequence=None, cho=None):
+def get_model_and_rbg_data(data_path, patient_info_path, glucose_sequence=None, cho=None, fixed_beta=False):
     data = pd.read_csv(data_path)
     data.t = pd.to_datetime(data['t'])
     if glucose_sequence is not None:
@@ -149,7 +160,7 @@ def get_model_and_rbg_data(data_path, patient_info_path, glucose_sequence=None, 
 
     # Environment and model setup
     env = Environment(save_name='ori', save_folder='./')
-    model = T1DModelSingleMeal(data=data, bw=bw, u2ss=u2ss, environment=env)
+    model = T1DModelSingleMeal(data=data, bw=bw, u2ss=u2ss, environment=env, fixed_beta=fixed_beta)
     rbg_data = ReplayBGData(data=data, model=model, environment=env)
     return model, rbg_data
 
@@ -179,6 +190,7 @@ def compute_params_metrics(samples, true_val):
     samples = np.asarray(samples)
     median_est = np.median(samples)
     abs_err_median = abs(median_est - true_val)
+    rel_err_median = 100 * abs_err_median / true_val
     wd = wasserstein_distance(samples, [true_val])
     cov = coverage(samples, true_val)
-    return [abs_err_median, wd, cov]
+    return [abs_err_median, rel_err_median, wd, cov]

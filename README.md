@@ -43,8 +43,11 @@ pip install -e .
 ### 1. Generate Training and Testing Data
 
 ```bash
-python gen_data_sbi.py --num_train 5000 --num_test 50 --save_path ./data/simulated 
+python gen_data_sbi.py --num_train 5000 --num_test 50 --save_path ./data/simulated [--fixed_beta]
 ```
+- Use the `--fixed_beta` flag to perform 8-parameter inference, as in the original ReplayBG paper.
+- Otherwise, omit the flag for 9-parameter inference, following their implementation.
+
 This will generate training and testing data saved at `./data/simulated/train_data.pt`, `./data/simulated/test_data.pt`, respectively. Alternatively, use the precomputed files provided: `./data/simulated/precomputed_train_data.pt` and `./data/simulated/precomputed_test_data.pt`
     
 
@@ -53,7 +56,7 @@ This will generate training and testing data saved at `./data/simulated/train_da
 ### 2. Run Baseline Estimation (MAP or MCMC)
 
 ```bash
-python baseline.py --idx {idx} --method {method} --test_data {test_data}
+python baseline.py --index {idx} --method {method} --test_data {test_data} [--fixed_beta]
 ```
 -   `idx`: Integer from `0` to `49` (index of test sample)
 -   `method`: One of `map` or `mcmc`
@@ -64,8 +67,8 @@ python baseline.py --idx {idx} --method {method} --test_data {test_data}
 
 ### 3. Train SBI Model
 
-```bash
-python train_sbi.py --train_data {train_data} --output_path ./trained_models/density_estimator.pt
+```bash 
+python train_sbi.py --train_data {train_data} --output_path ./trained_models/density_estimator.pt [--fixed_beta]
 ```
 -   `train_data`: Path to training dataset (`./data/simulated/train_data.pt` or precomputed file)
 -   `output_path`: Path to save the trained model . A pretrained model is also available at `./trained_models/pretrained_density_estimator.pt`

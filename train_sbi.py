@@ -11,8 +11,8 @@ def main(args):
     print(f"Using device: {device}")
 
     # Load model and prior
-    model, rbg_data = get_model_and_rbg_data(args.data_path, args.patient_info_path)
-    custom_prior = get_prior(model, rbg_data, device)
+    model, rbg_data = get_model_and_rbg_data(args.data_path, args.patient_info_path, fixed_beta=args.fixed_beta)
+    custom_prior = get_prior(model, rbg_data, device, fixed_beta=args.fixed_beta)
     prior, _, _ = process_prior(custom_prior)
 
     # Load training data
@@ -34,6 +34,7 @@ if __name__ == "__main__":
     parser.add_argument("--patient_info_path", type=str, default='./data/patient_info.csv', help="Path to the patient_info csv data file")
     parser.add_argument("--train_data", type=str, default='./data/simulated/train_data.pt', help="Path to training theta .pt file.")
     parser.add_argument("--output_path", type=str, default="./trained_models/density_estimator.pt")
+    parser.add_argument("--fixed_beta",action="store_true", help="Whether to fix beta as 0")
 
     args = parser.parse_args()
     main(args)

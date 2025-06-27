@@ -94,7 +94,8 @@ class T1DModelSingleMeal:
                  previous_data_name: str | None = None,
                  environment: Environment | None = None,
                  twinning_method: str = 'mcmc',
-                 is_twin: bool = False
+                 is_twin: bool = False,
+                 fixed_beta: bool = False,
                  ):
         """
         Constructs all the necessary attributes for the Model object.
@@ -118,6 +119,8 @@ class T1DModelSingleMeal:
             The method to used to twin the model.
         is_twin: bool, optional, default: False
             Whether or not the model is being created during twinning.
+        fixed_beta: bool, optional, default: False
+            Whether to set beta as 0 (like in the paper)
         """
 
         # Time constants during simulation
@@ -145,7 +148,7 @@ class T1DModelSingleMeal:
 
         # initial guess for the SD of each parameter
         self.start_guess_sigma = np.array([1, 5e-4, 1e-3, 1e-3, 1e-3, 1e-3])
-
+        self.fixed_beta = fixed_beta
         if is_twin:
             # Attach SI
             self.pos_SI = self.start_guess.shape[0]
@@ -157,11 +160,12 @@ class T1DModelSingleMeal:
             self.unknown_parameters = np.append(self.unknown_parameters, 'kabs')
             self.start_guess = np.append(self.start_guess, self.model_parameters.kabs)
             self.start_guess_sigma = np.append(self.start_guess_sigma, 1e-3)
-            # Attach beta
-            self.pos_beta = self.start_guess.shape[0]
-            self.unknown_parameters = np.append(self.unknown_parameters, 'beta')
-            self.start_guess = np.append(self.start_guess, self.model_parameters.beta)
-            self.start_guess_sigma = np.append(self.start_guess_sigma, 0.5)
+            if not fixed_beta:
+                # Attach beta
+                self.pos_beta = self.start_guess.shape[0]
+                self.unknown_parameters = np.append(self.unknown_parameters, 'beta')
+                self.start_guess = np.append(self.start_guess, self.model_parameters.beta)
+                self.start_guess_sigma = np.append(self.start_guess_sigma, 0.5)
 
         # Exercise
         self.exercise = environment.exercise
@@ -172,7 +176,6 @@ class T1DModelSingleMeal:
         self.CGM = np.empty([self.tysteps, ])
         self.A = np.empty([self.nx - 3, self.nx - 3])
         self.B = np.empty([self.nx - 3, ])
-
         # Remember twinning method
         self.twinning_method = twinning_method
 
@@ -225,16 +228,26 @@ class T1DModelSingleMeal:
         mp = copy.deepcopy(self.model_parameters)
           
         # Set model parameters to current guess
-        (mp.Gb,
-         mp.SG,
-         mp.p2,
-         mp.ka2,
-         mp.kd,
-         mp.kempt,
-         mp.SI,
-         mp.kabs,
-         mp.beta) = theta
-        mp.beta = float(mp.beta)
+        if self.fixed_beta:
+            (mp.Gb,
+             mp.SG,
+             mp.p2,
+             mp.ka2,
+             mp.kd,
+             mp.kempt,
+             mp.SI,
+             mp.kabs) = theta
+        else:
+            (mp.Gb,
+             mp.SG,
+             mp.p2,
+             mp.ka2,
+             mp.kd,
+             mp.kempt,
+             mp.SI,
+             mp.kabs,
+             mp.beta) = theta
+            mp.beta = float(mp.beta)
         # Enforce constraints
         mp.kgri = mp.kempt
 
@@ -313,16 +326,26 @@ class T1DModelSingleMeal:
         mp = copy.deepcopy(self.model_parameters)
           
         # Set model parameters to current guess
-        (mp.Gb,
-         mp.SG,
-         mp.p2,
-         mp.ka2,
-         mp.kd,
-         mp.kempt,
-         mp.SI,
-         mp.kabs,
-         mp.beta) = theta
-        mp.beta = float(mp.beta)
+        if self.fixed_beta:
+            (mp.Gb,
+             mp.SG,
+             mp.p2,
+             mp.ka2,
+             mp.kd,
+             mp.kempt,
+             mp.SI,
+             mp.kabs) = theta
+        else:
+            (mp.Gb,
+             mp.SG,
+             mp.p2,
+             mp.ka2,
+             mp.kd,
+             mp.kempt,
+             mp.SI,
+             mp.kabs,
+             mp.beta) = theta
+            mp.beta = float(mp.beta)
         # Enforce constraints
         mp.kgri = mp.kempt
 
@@ -799,15 +822,25 @@ class T1DModelSingleMeal:
         """
 
         # Set model parameters to current guess
-        (self.model_parameters.Gb,
-         self.model_parameters.SG,
-         self.model_parameters.p2,
-         self.model_parameters.ka2,
-         self.model_parameters.kd,
-         self.model_parameters.kempt,
-         self.model_parameters.SI,
-         self.model_parameters.kabs,
-         self.model_parameters.beta) = theta
+        if self.fixed_beta:
+            (self.model_parameters.Gb,
+             self.model_parameters.SG,
+             self.model_parameters.p2,
+             self.model_parameters.ka2,
+             self.model_parameters.kd,
+             self.model_parameters.kempt,
+             self.model_parameters.SI,
+             self.model_parameters.kabs) = theta
+        else:
+            (self.model_parameters.Gb,
+             self.model_parameters.SG,
+             self.model_parameters.p2,
+             self.model_parameters.ka2,
+             self.model_parameters.kd,
+             self.model_parameters.kempt,
+             self.model_parameters.SI,
+             self.model_parameters.kabs,
+             self.model_parameters.beta) = theta
 
         # Enforce constraints
         self.model_parameters.kgri = self.model_parameters.kempt

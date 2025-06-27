@@ -43,7 +43,8 @@ def main(args):
         exercise=False,
         seed=1,
         verbose=True,
-        plot_mode=False
+        plot_mode=False,
+        fixed_beta=True,
     )
 
     # Step 1: Twinning

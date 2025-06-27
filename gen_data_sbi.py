@@ -15,8 +15,8 @@ def main(args):
     print(f"Using device: {device}")
 
     # Load model and data
-    model, rbg_data = get_model_and_rbg_data(args.data_path, args.patient_info_path)
-    custom_prior = get_prior(model, rbg_data, device)
+    model, rbg_data = get_model_and_rbg_data(args.data_path, args.patient_info_path, fixed_beta=args.fixed_beta)
+    custom_prior = get_prior(model, rbg_data, device, args.fixed_beta)
     prior, _, _ = process_prior(custom_prior)
 
     restriction_estimator = RestrictionEstimator(prior=prior)
@@ -24,6 +24,7 @@ def main(args):
 
     for r in tqdm(range(args.num_rounds), desc="SBI Rounds"):
         theta = proposals[-1].sample((args.batch_size,)).to(device)
+        print(theta.shape)
 
         # Prepare inputs for multiprocessing
         input_data = [(theta[i].cpu().numpy(), model, rbg_data) for i in range(args.batch_size)]
@@ -48,7 +49,7 @@ def main(args):
         theta = theta[valid_idxs].float()
 
         # Apply value filtering
-        x[(x < 20) | (x > 400)] = float("nan")
+        x[(x < 40) | (x > 400)] = float("nan")
 
         restriction_estimator.append_simulations(theta, x)
 
@@ -64,7 +65,12 @@ def main(args):
     print("Before filtering:", all_theta.shape, all_x.shape)
 
     # Filter out NaNs
-    valid_rows = (~torch.isnan(all_theta).any(dim=1)) & (~torch.isnan(all_x).any(dim=1))
+    valid_rows = (
+        (~torch.isnan(all_theta).any(dim=1)) &
+        (~torch.isnan(all_x).any(dim=1)) &
+        (all_x.ge(40).all(dim=1)) &
+        (all_x.le(400).all(dim=1))
+    )
     all_theta = all_theta[valid_rows]
     all_x = all_x[valid_rows]
     print("After filtering:", all_theta.shape, all_x.shape)
@@ -88,7 +94,7 @@ def main(args):
     # Shuffle and split
     indices = torch.randperm(total_available)
     test_idx = indices[:args.num_test]
-    train_idx = indices[args.num_test:]
+    train_idx = indices[args.num_test:][:args.num_train]
 
     train_theta, train_x = all_theta[train_idx], all_x[train_idx]
     test_theta, test_x = all_theta[test_idx], all_x[test_idx]
@@ -109,6 +115,6 @@ if __name__ == "__main__":
     parser.add_argument("--num_train", type=int, default=5000, help="Number of training samples to save")
     parser.add_argument("--num_test", type=int, default=50, help="Number of test samples to save")
     parser.add_argument("--save_path", type=str, default="./data/simulated", help="Disable CUDA and use CPU even if available")
-
+    parser.add_argument("--fixed_beta",action="store_true", help="Whether to fix beta as 0")
     args = parser.parse_args()
     main(args)

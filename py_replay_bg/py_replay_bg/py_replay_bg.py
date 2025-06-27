@@ -54,7 +54,7 @@ class ReplayBG:
     def __init__(self, save_folder: str, blueprint: str = 'single_meal',
                  yts: int = 5, exercise: bool = False,
                  seed: int = 1,
-                 plot_mode: bool = True, verbose: bool = True
+                 plot_mode: bool = True, verbose: bool = True, fixed_beta: bool = False,
                  ):
         """
         Constructs all the necessary attributes for the ReplayBG object.
@@ -100,7 +100,8 @@ class ReplayBG:
         Cappon et al., "ReplayBG: a methodology to identify a personalized model from type 1 diabetes data and simulate
         glucose concentrations to assess alternative therapies", IEEE Transactions on Biomedical Engineering, 2023.
         """
-
+        self.fixed_beta = fixed_beta
+        
         # Validate input
         InputValidatorInit(
             save_folder=save_folder,
@@ -215,7 +216,7 @@ class ReplayBG:
                                        previous_data_name=previous_data_name,
                                        twinning_method=twinning_method,
                                        environment=self.environment,
-                                       is_twin=True)
+                                       is_twin=True, fixed_beta=self.fixed_beta)
         else:
             model = T1DModelMultiMeal(data=data, bw=bw, u2ss=u2ss, x0=x0,
                                       previous_data_name=previous_data_name,
@@ -460,7 +461,7 @@ class ReplayBG:
                                        previous_data_name=previous_data_name,
                                        twinning_method=twinning_method,
                                        environment=self.environment,
-                                       is_twin=False)
+                                       is_twin=False, fixed_beta=self.fixed_beta)
         else:
             model = T1DModelMultiMeal(data=data, bw=bw, u2ss=u2ss, x0=x0,
                                       previous_data_name=previous_data_name,
@@ -498,7 +499,9 @@ class ReplayBG:
             environment=self.environment,
             model=model,
             dss=dss,
-            twinning_method=twinning_method)
+            twinning_method=twinning_method,
+            fixed_beta=self.fixed_beta,
+        )
         replay_results = replayer.replay_scenario()
 
         # Plot results if plot_mode is enabled

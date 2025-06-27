@@ -39,7 +39,10 @@ def log_prior_single_meal(
     """
 
     # unpack the model parameters
-    Gb, SG, p2, ka2, kd, kempt, SI, kabs, beta = theta
+    if len(theta) == 9:
+        Gb, SG, p2, ka2, kd, kempt, SI, kabs, beta = theta
+    else:
+        Gb, SG, p2, ka2, kd, kempt, SI, kabs = theta
     # compute each log prior
     logprior_SI = log_gamma(SI * VG, 3.3, 1 / 5e-4)
     logprior_p2 = log_norm(np.sqrt(p2), mu=0.11, sigma=0.004) if 0 < p2 < 1 else -np.inf
