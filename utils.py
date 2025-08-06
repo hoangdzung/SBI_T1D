@@ -8,26 +8,11 @@ from py_replay_bg.data import ReplayBGData
 
 import pandas as pd 
 import numpy as np 
-from scipy.stats import wasserstein_distance
 from copy import deepcopy
 from pathos.multiprocessing import ProcessPool as Pool
 
 N_PARAMS=9
 N_PARAMS_HAT=18
-
-def sample_one(theta: torch.tensor, model: T1DModelSingleMeal, rbg_data: ReplayBGData, sample_meal_func: Optional[Callable] = None):
-    if sample_meal_func is not None:
-        # Sample meal data
-        #TODO: Write sample_meal_func to return meal data
-        meal_data = sample_meal_func(rbg_data)
-        new_rbg_data = deepcopy(rbg_data)
-        #TODO: Write update_meal_data to handle meal data
-        new_rbg_data.update_meal_data(meal_data)
-    else:
-        new_rbg_data = rbg_data
-    x0 = model.sample_x0(new_rbg_data, theta) 
-    return x0
-            
 class CustomPrior:
     def __init__(self, model: T1DModelSingleMeal, rbg_data: ReplayBGData, device: Any, 
                  sample_meal_func: Optional[Callable] = None, fixed_beta:bool = False):
@@ -105,7 +90,7 @@ class CustomPrior:
 
 
         # Run sampling in parallel
-        input_data = [(theta[i], self.model, self.rbg_data, self.sample_meal_func) for i in range(n_samples)]
+        input_data = [(theta[i].cpu().numpy(), self.model, self.rbg_data, self.sample_meal_func) for i in range(n_samples)]
         with Pool() as pool:
             x0s = pool.map(sample_one, input_data)            
         x0s = torch.tensor(x0s, dtype=torch.float32, device=self.device)
@@ -147,9 +132,31 @@ class CustomPrior:
         return log_prob
     
     
-def get_prior(model: T1DModelSingleMeal, rbg_data: ReplayBGData, device = torch.device('cpu'), fixed_beta=False) -> CustomPrior:
-    custom_prior = CustomPrior(model=model, rbg_data=rbg_data, device=device, fixed_beta=fixed_beta)
+def get_prior(model: T1DModelSingleMeal, 
+            rbg_data: ReplayBGData, 
+            device = torch.device('cpu'), 
+            sample_meal_func: Optional[Callable] = None,
+            fixed_beta=False) -> CustomPrior:
+    custom_prior = CustomPrior(model=model, 
+                            rbg_data=rbg_data, 
+                            device=device, 
+                            sample_meal_func=sample_meal_func, 
+                            fixed_beta=fixed_beta)
     return custom_prior
+
+def sample_one(args):
+    theta, model, rbg_data, sample_meal_func = args
+    if sample_meal_func is not None:
+        # Sample meal data
+        #TODO: Write sample_meal_func to return meal data
+        meal_data = sample_meal_func(rbg_data)
+        new_rbg_data = deepcopy(rbg_data)
+        #TODO: Write update_meal_data to handle meal data
+        new_rbg_data.update_meal_data(meal_data)
+    else:
+        new_rbg_data = rbg_data
+    x0 = model.sample_x0(new_rbg_data, theta) 
+    return x0
 
 def simulate_one(args):
     theta_np, model, rbg_data = args
@@ -185,34 +192,3 @@ def get_model_and_rbg_data(data_path, patient_info_path, glucose_sequence=None, 
     model = T1DModelSingleMeal(data=data, bw=bw, u2ss=u2ss, environment=env, fixed_beta=fixed_beta)
     rbg_data = ReplayBGData(data=data, model=model, environment=env)
     return model, rbg_data
-
-
-def print_summary(name, mard_med, rmsd_med):
-    print(f"{name} MARD: {np.mean(mard_med) * 100:.02f} ± {np.std(mard_med)*100:.02f}%, "
-          f"RMSD: {np.mean(rmsd_med):.02f} ± {np.std(rmsd_med):.02f}")
-
-def compute_cgm_metrics(pred_median, true_x):
-    mard = np.mean(np.abs((pred_median - true_x) / true_x))
-    rmsd = np.sqrt(np.mean((pred_median - true_x) ** 2))
-    return mard, rmsd
-
-def coverage(samples, true_val, lower=2.5, upper=97.5):
-    """Check if true_val lies within the credible interval."""
-    lower_bound = np.percentile(samples, lower)
-    upper_bound = np.percentile(samples, upper)
-    return lower_bound <= true_val <= upper_bound
-
-def compute_params_metrics(samples, true_val):
-    """
-    Compute:
-    - abs(median - true)
-    - wasserstein distance
-    - coverage
-    """
-    samples = np.asarray(samples)
-    median_est = np.median(samples)
-    abs_err_median = abs(median_est - true_val)
-    rel_err_median = 100 * abs_err_median / true_val
-    wd = wasserstein_distance(samples, [true_val])
-    cov = coverage(samples, true_val)
-    return [abs_err_median, rel_err_median, wd, cov]

@@ -16,20 +16,28 @@ def main(args):
 
     # Load model and data
     model, rbg_data = get_model_and_rbg_data(args.data_path, args.patient_info_path, fixed_beta=args.fixed_beta)
-    custom_prior = get_prior(model, rbg_data, device, args.fixed_beta)
+    if args.meal_sampling:
+        sample_meal_func = lambda : None # TODO: Implement meal sampling function
+    else:
+        sample_meal_func = None
+    custom_prior = get_prior(model, rbg_data, device, sample_meal_func, args.fixed_beta)
     prior, _, _ = process_prior(custom_prior)
 
     restriction_estimator = RestrictionEstimator(prior=prior)
     proposals = [prior]
 
     for r in tqdm(range(args.num_rounds), desc="SBI Rounds"):
+        # TODO: Somehow also need to return sampled meal here
+        sampled_meal = None
         theta = proposals[-1].sample((args.batch_size,)).to(device)
         print(theta.shape)
 
         # Prepare inputs for multiprocessing
+        # TODO: update rbg_data with sampled meal
         input_data = [(theta[i].cpu().numpy(), model, rbg_data) for i in range(args.batch_size)]
 
         # Run simulations in parallel
+        # TODO: Simulate_one also need to return insulin if meal sampling is enabled
         with Pool() as pool:
             results = pool.map(simulate_one, input_data)
 
@@ -116,5 +124,6 @@ if __name__ == "__main__":
     parser.add_argument("--num_test", type=int, default=50, help="Number of test samples to save")
     parser.add_argument("--save_path", type=str, default="./data/simulated", help="Disable CUDA and use CPU even if available")
     parser.add_argument("--fixed_beta",action="store_true", help="Whether to fix beta as 0")
+    parser.add_argument("--meal_sampling",action="store_true", help="Whether to sample meal")
     args = parser.parse_args()
     main(args)
