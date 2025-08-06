@@ -1,3 +1,4 @@
+from typing import Any, Callable, Optional
 import torch
 import pyro.distributions as dist
 
@@ -8,15 +9,33 @@ from py_replay_bg.data import ReplayBGData
 import pandas as pd 
 import numpy as np 
 from scipy.stats import wasserstein_distance
+from copy import deepcopy
+from pathos.multiprocessing import ProcessPool as Pool
 
 N_PARAMS=9
 N_PARAMS_HAT=18
+
+def sample_one(theta: torch.tensor, model: T1DModelSingleMeal, rbg_data: ReplayBGData, sample_meal_func: Optional[Callable] = None):
+    if sample_meal_func is not None:
+        # Sample meal data
+        #TODO: Write sample_meal_func to return meal data
+        meal_data = sample_meal_func(rbg_data)
+        new_rbg_data = deepcopy(rbg_data)
+        #TODO: Write update_meal_data to handle meal data
+        new_rbg_data.update_meal_data(meal_data)
+    else:
+        new_rbg_data = rbg_data
+    x0 = model.sample_x0(new_rbg_data, theta) 
+    return x0
+            
 class CustomPrior:
-    def __init__(self, model, rbg_data, device, fixed_beta=False):
+    def __init__(self, model: T1DModelSingleMeal, rbg_data: ReplayBGData, device: Any, 
+                 sample_meal_func: Optional[Callable] = None, fixed_beta:bool = False):
         self.device = device
         self.model = model
         self.rbg_data = rbg_data
         self.n_params = N_PARAMS
+        self.sample_meal_func = sample_meal_func
         self.fixed_beta = fixed_beta
         if fixed_beta:
             self.n_params -= 1
@@ -84,8 +103,11 @@ class CustomPrior:
             beta = torch.rand(n_samples, device=self.device) * 60
             theta = torch.stack([Gb, SG, p2, ka2, kd, kempt, SI, kabs, beta], dim=1)
 
-        # Sample x0s
-        x0s = np.array([self.model.sample_x0(self.rbg_data, t.cpu().numpy()) for t in theta])
+
+        # Run sampling in parallel
+        input_data = [(theta[i], self.model, self.rbg_data, self.sample_meal_func) for i in range(n_samples)]
+        with Pool() as pool:
+            x0s = pool.map(sample_one, input_data)            
         x0s = torch.tensor(x0s, dtype=torch.float32, device=self.device)
 
         samples = torch.cat([theta, x0s], dim=1)
