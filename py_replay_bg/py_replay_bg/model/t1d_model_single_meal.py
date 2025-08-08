@@ -1,3 +1,4 @@
+from typing import Any, Optional
 import numpy as np
 
 import os
@@ -223,102 +224,11 @@ class T1DModelSingleMeal:
         if self.x0 is not None:
             self.x0[2:5] = [0, 0, 0]
 
-    def sample_x0(self, rbg_data: ReplayBGData, theta: np.ndarray):
-        # Rename parameters for brevity
-        mp = copy.deepcopy(self.model_parameters)
-          
-        # Set model parameters to current guess
-        if self.fixed_beta:
-            (mp.Gb,
-             mp.SG,
-             mp.p2,
-             mp.ka2,
-             mp.kd,
-             mp.kempt,
-             mp.SI,
-             mp.kabs) = theta
-        else:
-            (mp.Gb,
-             mp.SG,
-             mp.p2,
-             mp.ka2,
-             mp.kd,
-             mp.kempt,
-             mp.SI,
-             mp.kabs,
-             mp.beta) = theta
-            mp.beta = float(mp.beta)
-        # Enforce constraints
-        mp.kgri = mp.kempt
-
-        x = np.zeros_like(self.x)
-        A = np.empty_like(self.A)
-        B = np.empty_like(self.B)
+    def sbi_simulate(self, rbg_data: ReplayBGData, theta: np.ndarray, dss: Optional[DSS], duration: int = None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        # TODO: Change this function to efficiently simulate and sample a window of time at the same time
+        # Also allow calculate bolus and basal base on meal
+        # We might want to sample a meal here if meal sampling is enabled, just like "replay" and return more outputs as simulate method
         
-        # Make copies of the inputs if replay to avoid to overwrite fields
-        bolus = rbg_data.bolus * 1
-        basal = rbg_data.basal * 1
-        meal = rbg_data.meal * 1
-
-        # Shift the insulin vectors according to the delays
-        bolus_delayed = np.append(np.zeros(shape=(mp.tau.__trunc__(),)), bolus)
-        basal_delayed = np.append(np.ones(shape=(mp.tau.__trunc__(),)) * basal[0], basal)
-
-        # Shift the meal vector according to the delays
-        meal_delayed = np.append(np.zeros(shape=(mp.beta.__trunc__(),)), meal)
-
-        # Get the initial conditions
-        k1 = mp.u2ss / mp.kd
-        k2 = mp.kd / mp.ka2 * k1
-        mp.Ipb = mp.ka2 / mp.ke * k2
-
-        # If initial model conditions are None, set the default initial conditions, i.e., steady-state
-        x[:, 0] = [mp.G0, mp.Xpb, 0, 0, mp.Qgutb, k1, k2, mp.Ipb, mp.G0]
-        
-        # Set the input state-space matrix
-        k1 = 1 / (1 + mp.kgri)
-        k2 = mp.kgri / (1 + mp.kempt)
-        k3 = 1 / (1 + mp.kempt)
-        kb = 1 / (1 + mp.kabs)
-        ki1 = 1 / (1 + mp.kd)
-        ki2 = 1 / (1 + mp.ka2)
-        kie = 1 / (1 + mp.ke)
-        A[:] = [[k1, 0, 0, 0, 0, 0],
-                      [k2, k3, 0, 0, 0, 0],
-                      [0, mp.kempt * kb, kb, 0, 0, 0],
-                      [0, 0, 0, ki1, 0, 0],
-                      [0, 0, 0, mp.kd * ki2, ki2, 0],
-                      [0, 0, 0, 0, mp.ka2 * kie, kie]]
-
-        for k in np.arange(1, random.randint(3, self.tsteps)):
-    
-            # Integration step
-            x[:, k] = model_step_equations_single_meal(A,
-                                                    bolus_delayed[k - 1] + basal_delayed[k - 1],
-                                                    meal_delayed[k - 1],
-                                                    rbg_data.t_hour[k - 1],
-                                                    x[:, k - 1],
-                                                    B,
-                                                    mp.r1,
-                                                    mp.r2,
-                                                    mp.kgri,
-                                                    mp.kd,
-                                                    mp.p2,
-                                                    mp.SI,
-                                                    mp.VI,
-                                                    mp.VG,
-                                                    mp.Ipb,
-                                                    mp.SG,
-                                                    mp.Gb,
-                                                    mp.f,
-                                                    mp.kabs,
-                                                    mp.alpha,
-                                                    self.previous_Ra[k-1])
-
-        
-        return x[:, k]
-    
-    def sbi_simulate(self, rbg_data: ReplayBGData, x0: np.ndarray | None, theta: np.ndarray):
         cgm = CGMSensors(ts=self.yts)
         sensors = Sensors(cgm=cgm)
         sensors.cgm.connect_new_cgm()
@@ -359,6 +269,10 @@ class T1DModelSingleMeal:
         bolus = rbg_data.bolus * 1
         basal = rbg_data.basal * 1
         meal = rbg_data.meal * 1
+        meal_type = copy.copy(rbg_data.meal_type)
+        meal_announcement = rbg_data.meal_announcement * 1
+        correction_bolus = bolus * 0
+        hypotreatments = meal * 0
 
         # Shift the insulin vectors according to the delays
         bolus_delayed = np.append(np.zeros(shape=(mp.tau.__trunc__(),)), bolus)
@@ -373,12 +287,7 @@ class T1DModelSingleMeal:
         mp.Ipb = mp.ka2 / mp.ke * k2
 
         # If initial model conditions are None, set the default initial conditions, i.e., steady-state
-        if x0 is None:
-            x[:, 0] = [mp.G0, mp.Xpb, 0, 0, mp.Qgutb, k1, k2, mp.Ipb, mp.G0]
-        # otherwise, set the initial model condition appropriately.
-        else:
-            # Scale as --> initial_old:initial_new = k1old:k1new
-            x[:, 0] = x0
+        x[:, 0] = [mp.G0, mp.Xpb, 0, 0, mp.Qgutb, k1, k2, mp.Ipb, mp.G0]
         
         # Set the initial glucose value
         G[0] = x[self.nx - 1, 0]
@@ -401,8 +310,125 @@ class T1DModelSingleMeal:
         # Set the initial cgm value if modality is 'replay' and make copies of meal vectors
         CGM[0] = sensors.cgm.measure(x[self.nx - 1, 0], 0)
 
-        for k in np.arange(1, self.tsteps):
-    
+        if duration is None:
+            duration = self.tsteps // 2
+            
+        if duration > self.tsteps:
+            raise ValueError("Duration must be less than or equal to the total simulation time steps.")
+        else:
+            stop_k = random.randint(duration, self.tsteps)
+        for k in np.arange(1, stop_k):
+            if dss is not None:
+                # Meal generation module
+                # Call the meal generator function handler
+                # ch, ma, t, dss = dss.meal_generator_handler(self.G[0:k],
+                #                                             meal[0:k] * mp.to_g,
+                #                                             meal_type[0:k],
+                #                                             meal_announcement[0:k],
+                #                                             hypotreatments[0:k],
+                #                                             bolus[0:k] * mp.to_g,
+                #                                             basal[0:k] * mp.to_g,
+                #                                             rbg_data.t_hour[0:k],
+                #                                             k-1,
+                #                                             dss,
+                #                                             "single_meal")
+                # ch_mgkg = ch * mp.to_mgkg
+                # # Add the CHO to the input (remember to add the delay)
+                # if t == 'M':
+                #     if (k+mp.beta.__trunc__()) < self.tsteps:
+                #         meal_delayed[k+mp.beta.__trunc__()] = meal_delayed[k+mp.beta.__trunc__()] + ch_mgkg
+                # elif t == 'O':
+                #     meal_delayed[k] = meal_delayed[k] + ch_mgkg
+
+                # # Update the event vectors
+                # meal_announcement[k] = meal_announcement[k] + ma
+                # meal_type[k] = t
+
+                # # Add the CHO to the non-delayed meal vector.
+                # meal[k] = meal[k] + ch_mgkg
+                        
+                # Bolus generation module
+                # Call the bolus calculator function handler
+                bo, dss = dss.bolus_calculator_handler(self.G[0:k],
+                                                            meal_announcement[0:k],
+                                                            meal_type[0:k], hypotreatments[0:k],
+                                                            bolus[0:k] * mp.to_g,
+                                                            basal[0:k] * mp.to_g,
+                                                            rbg_data.t_hour[0:k],
+                                                            k-1,
+                                                        dss)
+                bo_mgkg = bo * mp.to_mgkg
+
+                # Add the bolus to the input bolus vector.
+                if(k+mp.tau.__trunc__()) < self.tsteps:
+                    bolus_delayed[k + mp.tau.__trunc__()] = bolus_delayed[k + mp.tau.__trunc__()] + bo_mgkg
+
+                # Add the bolus to the non-delayed bolus vector.
+                bolus[k] = bolus[k] + bo_mgkg
+
+                # Basal rate generation module
+                        # Call the basal rate function handler
+                ba, dss = dss.basal_handler(self.G[0:k],
+                                            meal_announcement[0:k],
+                                            meal_type[0:k],
+                                            hypotreatments[0:k],
+                                            bolus[0:k] * mp.to_g,
+                                            basal[0:k] * mp.to_g,
+                                            rbg_data.t_hour[0:k],
+                                            k-1,
+                                            dss)
+                ba_mgkg = ba * mp.to_mgkg
+                # Add the basal to the input basal vector.
+                if (k + mp.tau.__trunc__()) < self.tsteps:
+                    basal_delayed[k + mp.tau.__trunc__()] = basal_delayed[
+                                                                k + mp.tau.__trunc__()] + ba_mgkg
+
+                # Add the bolus to the non-delayed bolus vector.
+                basal[k] = basal[k] + ba_mgkg
+
+                # Hypotreatment generation module
+                if dss.enable_hypotreatments:
+
+                    # Call the hypotreatment handler
+                    ht, dss = dss.hypotreatments_handler(self.G[0:k],
+                                                            meal_announcement[0:k],
+                                                            meal_type[0:k],
+                                                            hypotreatments[0:k],
+                                                            bolus[0:k] * mp.to_g,
+                                                            basal[0:k] * mp.to_g,
+                                                            rbg_data.t_hour[0:k],
+                                                            k - 1,
+                                                            dss)
+                    ht_mgkg = ht * mp.to_mgkg
+                    meal_delayed[k] = meal_delayed[k] + ht_mgkg
+
+                    # Update the hypotreatments event vectors
+                    hypotreatments[k - 1] = hypotreatments[k - 1] + ht
+
+                # Correction bolus delivery module if it is enabled
+                if dss.enable_correction_boluses:
+                    # Call the correction boluses handler
+                    cb, dss = dss.correction_boluses_handler(self.G[0:k],
+                                                                meal_announcement[0:k],
+                                                                meal_type[0:k],
+                                                                hypotreatments[0:k],
+                                                                bolus[0:k] * mp.to_g,
+                                                                basal[0:k] * mp.to_g,
+                                                                rbg_data.t_hour[0:k],
+                                                                k - 1,
+                                                                dss)
+                    cb_mgkg = cb * mp.to_mgkg
+                    # Add the cb to the input bolus vector.
+                    if (k + mp.tau.__trunc__()) < self.tsteps:
+                        bolus_delayed[k + mp.tau.__trunc__()] = bolus_delayed[
+                                                                    k + mp.tau.__trunc__()] + cb_mgkg
+
+                    # Add the bolus to the non-delayed bolus vector.
+                    bolus[k] = bolus[k] + cb_mgkg
+
+                    # Update the correction_bolus event vectors
+                    correction_bolus[k - 1] = correction_bolus[k - 1] + cb
+
             # Integration step
             x[:, k] = model_step_equations_single_meal(A,
                                                     bolus_delayed[k - 1] + basal_delayed[k - 1],
@@ -435,8 +461,14 @@ class T1DModelSingleMeal:
                 CGM[int(k / sensors.cgm.ts)] = sensors.cgm.measure(x[self.nx - 1, k], (k - sensors.cgm.connected_at) / (24 * 60))
 
         # TODO: add vo2
-        return x, CGM
+        return (x[:,-duration:], 
+                CGM[-duration//sensors.cgm.ts:], 
+                bolus[-duration:] * mp.to_g,
+                basal[-duration:] * mp.to_g,
+                meal[-duration:] * mp.to_g,
+            )
         
+            
     def simulate(self,
                  rbg_data: ReplayBGData,
                  modality: str,

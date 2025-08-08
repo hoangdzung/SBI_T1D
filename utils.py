@@ -14,18 +14,11 @@ from pathos.multiprocessing import ProcessPool as Pool
 N_PARAMS=9
 N_PARAMS_HAT=18
 class CustomPrior:
-    def __init__(self, model: T1DModelSingleMeal, rbg_data: ReplayBGData, device: Any, 
-                 sample_meal_func: Optional[Callable] = None, fixed_beta:bool = False):
-        self.device = device
-        self.model = model
-        self.rbg_data = rbg_data
-        self.n_params = N_PARAMS
-        self.sample_meal_func = sample_meal_func
+    def __init__(self, VG: float = 1.45, device: Optional[Any] = None, fixed_beta:bool = False):
+        self.device = device if device is not None else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.fixed_beta = fixed_beta
-        if fixed_beta:
-            self.n_params -= 1
             
-        self.VG = torch.tensor(model.model_parameters.VG, device=self.device)
+        self.VG = torch.tensor(VG, device=self.device)
 
         # Distributions
         self.gamma_SI = dist.Gamma(torch.tensor(3.3, device=self.device), torch.tensor(1 / 5e-4, device=self.device))
@@ -88,30 +81,17 @@ class CustomPrior:
             beta = torch.rand(n_samples, device=self.device) * 60
             theta = torch.stack([Gb, SG, p2, ka2, kd, kempt, SI, kabs, beta], dim=1)
 
-
-        # Run sampling in parallel
-        input_data = [(theta[i].cpu().numpy(), self.model, self.rbg_data, self.sample_meal_func) for i in range(n_samples)]
-        with Pool() as pool:
-            x0s = pool.map(sample_one, input_data)            
-        x0s = torch.tensor(x0s, dtype=torch.float32, device=self.device)
-
-        samples = torch.cat([theta, x0s], dim=1)
         if squeeze:
-            return samples.squeeze(0)
-        return samples
+            return theta.squeeze(0)
+        return theta
 
-    def log_prob(self, samples):
-        theta = samples[:, :self.n_params]
-        x0 = samples[:, self.n_params:]
-
-        # If any x0 values are negative, assign -inf
-        mask_invalid = (x0 < 0).any(dim=1)
+    def log_prob(self, theta):
         if self.fixed_beta:
             Gb, SG, p2, ka2, kd, kempt, SI, kabs = theta.unbind(dim=1)
         else:
             Gb, SG, p2, ka2, kd, kempt, SI, kabs, beta = theta.unbind(dim=1)
 
-        log_prob = torch.zeros(samples.shape[0], device=self.device)
+        log_prob = torch.zeros(theta.shape[0], device=self.device)
 
         log_prob += self.gamma_SI.log_prob(SI * self.VG) + torch.log(self.VG)
         p2_sqrt = torch.sqrt(p2)
@@ -125,54 +105,30 @@ class CustomPrior:
         log_prob += -torch.log(torch.tensor(60.0, device=self.device))
 
         # Constraint: ka2 < kd, kabs < kempt
-        mask_invalid |= (ka2 >= kd) | (kabs >= kempt)
+        mask_invalid = (ka2 >= kd) | (kabs >= kempt)
         
         log_prob[mask_invalid] = -float('inf')
 
         return log_prob
     
     
-def get_prior(model: T1DModelSingleMeal, 
-            rbg_data: ReplayBGData, 
+def get_prior(VG: float = 1.45, 
             device = torch.device('cpu'), 
-            sample_meal_func: Optional[Callable] = None,
             fixed_beta=False) -> CustomPrior:
-    custom_prior = CustomPrior(model=model, 
-                            rbg_data=rbg_data, 
+    custom_prior = CustomPrior(VG=VG, 
                             device=device, 
-                            sample_meal_func=sample_meal_func, 
                             fixed_beta=fixed_beta)
     return custom_prior
 
-def sample_one(args):
-    theta, model, rbg_data, sample_meal_func = args
-    if sample_meal_func is not None:
-        # Sample meal data
-        #TODO: Write sample_meal_func to return meal data
-        meal_data = sample_meal_func(rbg_data)
-        new_rbg_data = deepcopy(rbg_data)
-        #TODO: Write update_meal_data to handle meal data
-        new_rbg_data.update_meal_data(meal_data)
-    else:
-        new_rbg_data = rbg_data
-    x0 = model.sample_x0(new_rbg_data, theta) 
-    return x0
-
 def simulate_one(args):
-    theta_np, model, rbg_data = args
+    theta_np, model, rbg_data, dss, length = args
     try:
-        if len(theta_np) > N_PARAMS:
-            x0 = theta_np[-N_PARAMS:]
-            theta = theta_np[:-N_PARAMS]
-        else:
-            x0 = None
-            theta = theta_np
-        all_states, cgm = model.sbi_simulate(rbg_data, x0, theta)
+        x, cgm, bolus, basal, meal = model.sbi_simulate(rbg_data, theta_np, dss, length)
     except Exception as e:
         print(e)
-        all_states, cgm = None, None
+        x, cgm, bolus, basal, meal = None, None, None, None, None
         
-    return all_states, cgm
+    return x, cgm, bolus, basal, meal
 
 def get_model_and_rbg_data(data_path, patient_info_path, glucose_sequence=None, cho=None, fixed_beta=False):
     data = pd.read_csv(data_path)
