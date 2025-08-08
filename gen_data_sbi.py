@@ -92,6 +92,7 @@ def main(args):
             proposal = restriction_estimator.restrict_prior()
             proposals.append(proposal)
         except Exception as e:
+            # TODO: fix this
             print(f"Error during restriction estimation: {e}")
             continue
 

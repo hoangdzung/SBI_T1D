@@ -43,9 +43,10 @@ pip install -e .
 ### 1. Generate Training and Testing Data
 
 ```bash
-python gen_data_sbi.py --num_train 5000 --num_test 50 --save_path ./data/simulated [--fixed_beta]
+python gen_data_sbi.py --num_train 5000 --num_test 50 --save_path ./data/simulated [--fixed_beta] [--meal_sampling]
 ```
 - Use the `--fixed_beta` flag to perform 8-parameter inference, as in the original ReplayBG paper.
+- Use the `--meal_sampling` flag to perform meal sampling.
 - Otherwise, omit the flag for 9-parameter inference, following their implementation.
 
 This will generate training and testing data saved at `./data/simulated/train_data.pt`, `./data/simulated/test_data.pt`, respectively. Alternatively, use the precomputed files provided: `./data/simulated/precomputed_train_data.pt` and `./data/simulated/precomputed_test_data.pt`

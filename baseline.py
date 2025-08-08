@@ -7,6 +7,30 @@ import pandas as pd
 from multiprocessing import freeze_support
 from py_replay_bg.py_replay_bg import ReplayBG
 
+def create_patient_df(data, idx):
+    # Extract row arrays
+    t = data['t'][idx]            # datetime64[ns] array
+    glucose =data['cgms'][idx]
+    cho = data['meals'][idx]
+    bolus = data['boluses'][idx]
+    basal = data['basals'][idx]
+
+    # Create empty label columns
+    bolus_label = np.full_like(bolus, np.nan, dtype=float)
+    cho_label = np.full_like(cho, np.nan, dtype=float)
+
+    # Build DataFrame
+    df = pd.DataFrame({
+        "t": pd.to_datetime(t).strftime("%d-%b-%Y %H:%M:%S"),
+        "glucose": glucose,
+        "cho": cho,
+        "bolus": bolus,
+        "basal": basal,
+        "bolus_label": bolus_label,
+        "cho_label": cho_label
+    })
+
+    return df
 
 def main(args):
     freeze_support()
@@ -16,16 +40,13 @@ def main(args):
         raise ValueError(f"Invalid method: {args.method}. Must be 'map' or 'mcmc'.")
 
     # Load test data
-    test_theta, test_x = torch.load(args.test_data, map_location=torch.device('cpu'))
-    if args.index >= len(test_x):
-        raise IndexError(f"Index {args.index} out of range for test data of size {len(test_x)}")
-    glucose_sequence = test_x[args.index].numpy()
-
-    # Load and inject glucose into data
-    data = pd.read_csv(args.data_path)
-    data['t'] = pd.to_datetime(data['t'])
-    data['glucose'] = glucose_sequence
-
+    test_data = torch.load(args.test_data, weights_only=False)
+    
+    if args.index >= len(test_data["t"]):
+        raise IndexError(f"Index {args.index} out of range for test data of size {len(test_data["t"])}")
+    
+    data = create_patient_df(test_data, args.index)
+    
     # Load patient info
     patient_info = pd.read_csv(args.patient_info_path)
     p_idx = np.where(patient_info['patient'] == 1)[0][0]
@@ -77,7 +98,6 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run ReplayBG twinning and replay.")
-    parser.add_argument("--data_path", type=str, default='./data/data_day_1.csv', help="Path to the csv data file")
     parser.add_argument("--patient_info_path", type=str, default='./data/patient_info.csv', help="Path to the patient_info csv data file")
     parser.add_argument("--index", type=int, required=True, help="Index of test sample to use.")
     parser.add_argument("--method", type=str, required=True, choices=["map", "mcmc"],
