@@ -1,5 +1,5 @@
 import torch
-
+import numpy as np
 import os
 import argparse
 from tqdm import tqdm
@@ -28,7 +28,7 @@ def main(args):
     else:
         dss = None
     
-    all_x0s, all_thetas, all_cgms, all_boluses, all_basals, all_meals = [], [], [], [], [], []
+    all_ts, all_x0s, all_thetas, all_cgms, all_boluses, all_basals, all_meals = [], [], [], [], [], [], []
     # add tqdm for while loop
     pbar = tqdm(total=args.num_train + args.num_test, desc="Generating samples", leave=True)
     while len(all_x0s) < args.num_train + args.num_test:
@@ -44,16 +44,16 @@ def main(args):
 
         # Filter valid results
         batch_fake_x = []
-        for i, (x, cgm, bolus, basal, meal) in enumerate(results):
+        for i, (t, x, cgm, bolus, basal, meal) in enumerate(results):
             if cgm is not None and cgm.max() <= 400 and cgm.min() >= 40 \
                 and (bolus >=0).all() and (basal >=0).all():
+                all_ts.append(t)
                 all_x0s.append(x[0])
                 all_thetas.append(theta[i].cpu().numpy())
                 all_cgms.append(cgm)
                 all_boluses.append(bolus)
                 all_basals.append(basal)
                 all_meals.append(meal)
-                all_thetas.append(theta[i].cpu().numpy())
                 batch_fake_x.append([1.0])
                 pbar.update(1)
             else:
@@ -95,50 +95,50 @@ def main(args):
             print(f"Error during restriction estimation: {e}")
             continue
 
-    # Convert to torch tensors (list of tensors if shapes vary)
-    def to_tensor_list(lst):
-        return [torch.tensor(x, dtype=torch.float32) for x in lst]
-
-    all_x0s = to_tensor_list(all_x0s)
-    all_thetas = to_tensor_list(all_thetas)
-    all_cgms = to_tensor_list(all_cgms)
-    all_boluses = to_tensor_list(all_boluses)
-    all_basals = to_tensor_list(all_basals)
-    all_meals = to_tensor_list(all_meals)
+    all_ts = np.stack(all_ts, axis=0)       # shape: (N, T)
+    all_x0s = np.stack(all_x0s, axis=0)     # shape: (N, features)
+    all_thetas = np.stack(all_thetas, axis=0)
+    all_cgms = np.stack(all_cgms, axis=0)
+    all_boluses = np.stack(all_boluses, axis=0)
+    all_basals = np.stack(all_basals, axis=0)
+    all_meals = np.stack(all_meals, axis=0)
 
     # Ensure same length
-    assert len(all_x0s) == len(all_thetas) == len(all_cgms) == len(all_boluses) == len(all_basals) == len(all_meals), \
+    assert len(all_ts) == len(all_x0s) == len(all_thetas) == len(all_cgms) == len(all_boluses) == len(all_basals) == len(all_meals), \
         "Data length mismatch — lists must be the same length."
 
-    # Create index list and split
-    indices = torch.randperm(len(all_x0s))
+    # Create shuffled indices
+    indices = np.random.permutation(len(all_x0s))
     split_idx = int(len(indices) * 0.8)  # 80% train, 20% test
     train_idx = indices[:split_idx]
     test_idx = indices[split_idx:]
 
-    # Helper function to index lists
-    def split_list(lst, idx):
-        return [lst[i] for i in idx]
+    # Helper to index ragged arrays safely
+    def split_array(arr, idx):
+        return arr[idx]
 
     # Split datasets
     train_data = {
-        "x0s": split_list(all_x0s, train_idx),
-        "thetas": split_list(all_thetas, train_idx),
-        "cgms": split_list(all_cgms, train_idx),
-        "boluses": split_list(all_boluses, train_idx),
-        "basals": split_list(all_basals, train_idx),
-        "meals": split_list(all_meals, train_idx)
+        "t": split_array(all_ts, train_idx),
+        "x0s": split_array(all_x0s, train_idx),
+        "thetas": split_array(all_thetas, train_idx),
+        "cgms": split_array(all_cgms, train_idx),
+        "boluses": split_array(all_boluses, train_idx),
+        "basals": split_array(all_basals, train_idx),
+        "meals": split_array(all_meals, train_idx)
     }
 
     test_data = {
-        "x0s": split_list(all_x0s, test_idx),
-        "thetas": split_list(all_thetas, test_idx),
-        "cgms": split_list(all_cgms, test_idx),
-        "boluses": split_list(all_boluses, test_idx),
-        "basals": split_list(all_basals, test_idx),
-        "meals": split_list(all_meals, test_idx)
+        "t": split_array(all_ts, test_idx),
+        "x0s": split_array(all_x0s, test_idx),
+        "thetas": split_array(all_thetas, test_idx),
+        "cgms": split_array(all_cgms, test_idx),
+        "boluses": split_array(all_boluses, test_idx),
+        "basals": split_array(all_basals, test_idx),
+        "meals": split_array(all_meals, test_idx)
     }
 
+    # Save
     os.makedirs(args.save_path, exist_ok=True)
     torch.save(train_data, os.path.join(args.save_path, "train_data.pt"))
     torch.save(test_data, os.path.join(args.save_path, "test_data.pt"))

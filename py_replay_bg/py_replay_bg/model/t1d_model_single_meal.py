@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import List, Optional
 import numpy as np
 
 import os
@@ -224,7 +224,7 @@ class T1DModelSingleMeal:
         if self.x0 is not None:
             self.x0[2:5] = [0, 0, 0]
 
-    def sbi_simulate(self, rbg_data: ReplayBGData, theta: np.ndarray, dss: Optional[DSS], duration: int = None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def sbi_simulate(self, rbg_data: ReplayBGData, theta: np.ndarray, dss: Optional[DSS], duration: Optional[int] = None) -> List[np.ndarray]:
         # TODO: Change this function to efficiently simulate and sample a window of time at the same time
         # Also allow calculate bolus and basal base on meal
         # We might want to sample a meal here if meal sampling is enabled, just like "replay" and return more outputs as simulate method
@@ -321,31 +321,31 @@ class T1DModelSingleMeal:
             if dss is not None:
                 # Meal generation module
                 # Call the meal generator function handler
-                # ch, ma, t, dss = dss.meal_generator_handler(self.G[0:k],
-                #                                             meal[0:k] * mp.to_g,
-                #                                             meal_type[0:k],
-                #                                             meal_announcement[0:k],
-                #                                             hypotreatments[0:k],
-                #                                             bolus[0:k] * mp.to_g,
-                #                                             basal[0:k] * mp.to_g,
-                #                                             rbg_data.t_hour[0:k],
-                #                                             k-1,
-                #                                             dss,
-                #                                             "single_meal")
-                # ch_mgkg = ch * mp.to_mgkg
-                # # Add the CHO to the input (remember to add the delay)
-                # if t == 'M':
-                #     if (k+mp.beta.__trunc__()) < self.tsteps:
-                #         meal_delayed[k+mp.beta.__trunc__()] = meal_delayed[k+mp.beta.__trunc__()] + ch_mgkg
-                # elif t == 'O':
-                #     meal_delayed[k] = meal_delayed[k] + ch_mgkg
+                ch, ma, t, dss = dss.meal_generator_handler(self.G[0:k],
+                                                            meal[0:k] * mp.to_g,
+                                                            meal_type[0:k],
+                                                            meal_announcement[0:k],
+                                                            hypotreatments[0:k],
+                                                            bolus[0:k] * mp.to_g,
+                                                            basal[0:k] * mp.to_g,
+                                                            rbg_data.t_hour[0:k],
+                                                            k-1,
+                                                            dss,
+                                                            "single_meal")
+                ch_mgkg = ch * mp.to_mgkg
+                # Add the CHO to the input (remember to add the delay)
+                if t == 'M':
+                    if (k+mp.beta.__trunc__()) < self.tsteps:
+                        meal_delayed[k+mp.beta.__trunc__()] = meal_delayed[k+mp.beta.__trunc__()] + ch_mgkg
+                elif t == 'O':
+                    meal_delayed[k] = meal_delayed[k] + ch_mgkg
 
-                # # Update the event vectors
-                # meal_announcement[k] = meal_announcement[k] + ma
-                # meal_type[k] = t
+                # Update the event vectors
+                meal_announcement[k] = meal_announcement[k] + ma
+                meal_type[k] = t
 
-                # # Add the CHO to the non-delayed meal vector.
-                # meal[k] = meal[k] + ch_mgkg
+                # Add the CHO to the non-delayed meal vector.
+                meal[k] = meal[k] + ch_mgkg
                         
                 # Bolus generation module
                 # Call the bolus calculator function handler
@@ -461,12 +461,13 @@ class T1DModelSingleMeal:
                 CGM[int(k / sensors.cgm.ts)] = sensors.cgm.measure(x[self.nx - 1, k], (k - sensors.cgm.connected_at) / (24 * 60))
 
         # TODO: add vo2
-        return (x[:,-duration:], 
+        return [rbg_data.t_data[-duration//sensors.cgm.ts:],
+                x[:,-duration:], 
                 CGM[-duration//sensors.cgm.ts:], 
-                bolus[-duration:] * mp.to_g,
-                basal[-duration:] * mp.to_g,
-                meal[-duration:] * mp.to_g,
-            )
+                bolus[-duration:][::sensors.cgm.ts] * mp.to_g,
+                basal[-duration:][::sensors.cgm.ts] * mp.to_g,
+                meal[-duration:][::sensors.cgm.ts] * mp.to_g,
+            ]
         
             
     def simulate(self,

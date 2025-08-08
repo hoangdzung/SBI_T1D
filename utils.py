@@ -123,12 +123,12 @@ def get_prior(VG: float = 1.45,
 def simulate_one(args):
     theta_np, model, rbg_data, dss, length = args
     try:
-        x, cgm, bolus, basal, meal = model.sbi_simulate(rbg_data, theta_np, dss, length)
+        t, x, cgm, bolus, basal, meal = model.sbi_simulate(rbg_data, theta_np, dss, length)
     except Exception as e:
         print(e)
-        x, cgm, bolus, basal, meal = None, None, None, None, None
+        t, x, cgm, bolus, basal, meal = None, None, None, None, None, None
         
-    return x, cgm, bolus, basal, meal
+    return t, x, cgm, bolus, basal, meal
 
 def get_model_and_rbg_data(data_path, patient_info_path, glucose_sequence=None, cho=None, fixed_beta=False):
     data = pd.read_csv(data_path)
