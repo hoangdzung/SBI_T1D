@@ -121,18 +121,23 @@ def get_prior(VG: float = 1.45,
     return custom_prior
 
 def simulate_one(args):
-    theta_np, model, rbg_data, dss, length = args
-    try:
-        t, x, cgm, bolus, basal, meal = model.sbi_simulate(rbg_data, theta_np, dss, length)
-    except Exception as e:
-        print(e)
-        t, x, cgm, bolus, basal, meal = None, None, None, None, None, None
+    theta_np, model, rbg_data, dss, sampling, x0 = args
+    # try:
+    t, x, cgm, bolus, basal, meal = model.sbi_simulate(rbg_data, theta_np, dss, x0, sampling)
+    # except Exception as e:
+    #     print("Simulate error", e)
+    #     t, x, cgm, bolus, basal, meal = None, None, None, None, None, None
         
     return t, x, cgm, bolus, basal, meal
 
-def get_model_and_rbg_data(data_path, patient_info_path, glucose_sequence=None, cho=None, fixed_beta=False):
-    data = pd.read_csv(data_path)
-    data.t = pd.to_datetime(data['t'])
+def get_model_and_rbg_data(data, patient_info_path, glucose_sequence=None, cho=None, fixed_beta=False):
+    if type(data) is str:
+        data = pd.read_csv(data)
+        data.t = pd.to_datetime(data['t'])
+    elif isinstance(data, pd.DataFrame):
+        data = deepcopy(data)
+    else:
+        raise TypeError("Data must be a file path or a pandas DataFrame.")
     if glucose_sequence is not None:
         common_len = min(len(data['glucose']), len(glucose_sequence))
         data['glucose'].values[:common_len] = glucose_sequence[:common_len]
@@ -148,3 +153,21 @@ def get_model_and_rbg_data(data_path, patient_info_path, glucose_sequence=None, 
     model = T1DModelSingleMeal(data=data, bw=bw, u2ss=u2ss, environment=env, fixed_beta=fixed_beta)
     rbg_data = ReplayBGData(data=data, model=model, environment=env)
     return model, rbg_data
+
+def create_patient_df(t, glucose, cho, bolus, basal):
+    # Create empty label columns
+    bolus_label = np.full_like(bolus, np.nan, dtype=float)
+    cho_label = np.full_like(cho, np.nan, dtype=float)
+
+    # Build DataFrame
+    df = pd.DataFrame({
+        "t": pd.to_datetime(t),
+        "glucose": glucose,
+        "cho": cho,
+        "bolus": bolus,
+        "basal": basal,
+        "bolus_label": bolus_label,
+        "cho_label": cho_label
+    })
+
+    return df

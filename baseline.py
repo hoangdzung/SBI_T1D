@@ -6,31 +6,7 @@ import numpy as np
 import pandas as pd
 from multiprocessing import freeze_support
 from py_replay_bg.py_replay_bg import ReplayBG
-
-def create_patient_df(data, idx):
-    # Extract row arrays
-    t = data['t'][idx]            # datetime64[ns] array
-    glucose =data['cgms'][idx]
-    cho = data['meals'][idx]
-    bolus = data['boluses'][idx]
-    basal = data['basals'][idx]
-
-    # Create empty label columns
-    bolus_label = np.full_like(bolus, np.nan, dtype=float)
-    cho_label = np.full_like(cho, np.nan, dtype=float)
-
-    # Build DataFrame
-    df = pd.DataFrame({
-        "t": pd.to_datetime(t).strftime("%d-%b-%Y %H:%M:%S"),
-        "glucose": glucose,
-        "cho": cho,
-        "bolus": bolus,
-        "basal": basal,
-        "bolus_label": bolus_label,
-        "cho_label": cho_label
-    })
-
-    return df
+from utils import create_patient_df
 
 def main(args):
     freeze_support()
@@ -43,10 +19,13 @@ def main(args):
     test_data = torch.load(args.test_data, weights_only=False)
     
     if args.index >= len(test_data["t"]):
-        raise IndexError(f"Index {args.index} out of range for test data of size {len(test_data["t"])}")
+        raise IndexError(f"Index {args.index} out of range for test data of size {len(test_data['t'])}")
     
-    data = create_patient_df(test_data, args.index)
-    
+    data = create_patient_df(t=test_data['t'][args.index],
+                             glucose=test_data['cgms'][args.index],
+                             cho=test_data['meals'][args.index],
+                             bolus=test_data['boluses'][args.index],
+                             basal=test_data['basals'][args.index])
     # Load patient info
     patient_info = pd.read_csv(args.patient_info_path)
     p_idx = np.where(patient_info['patient'] == 1)[0][0]

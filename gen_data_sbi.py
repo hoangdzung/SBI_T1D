@@ -36,7 +36,7 @@ def main(args):
         print(theta.shape)
 
         # Prepare inputs for multiprocessing
-        input_data = [(theta[i].cpu().numpy(), model, rbg_data, dss, None) for i in range(args.batch_size)]
+        input_data = [(theta[i].cpu().numpy(), model, rbg_data, dss, True, None) for i in range(args.batch_size)]
 
         # Run simulations in parallel
         with Pool() as pool:
@@ -46,9 +46,9 @@ def main(args):
         batch_fake_x = []
         for i, (t, x, cgm, bolus, basal, meal) in enumerate(results):
             if cgm is not None and cgm.max() <= 400 and cgm.min() >= 40 \
-                and (bolus >=0).all() and (basal >=0).all():
+                and (x >=0).all() and (bolus >=0).all() and (basal >=0).all():
                 all_ts.append(t)
-                all_x0s.append(x[0])
+                all_x0s.append(x[:, 0])
                 all_thetas.append(theta[i].cpu().numpy())
                 all_cgms.append(cgm)
                 all_boluses.append(bolus)
@@ -70,7 +70,7 @@ def main(args):
         invalid_indices = (batch_fake_x.squeeze() == 0.0).nonzero(as_tuple=True)[0]
 
         num_valid = len(valid_indices)
-        num_invalid_needed = num_valid * 2
+        num_invalid_needed = num_valid 
 
         if len(invalid_indices) > num_invalid_needed:
             # Randomly sample the required number of invalid samples
@@ -110,9 +110,8 @@ def main(args):
 
     # Create shuffled indices
     indices = np.random.permutation(len(all_x0s))
-    split_idx = int(len(indices) * 0.8)  # 80% train, 20% test
-    train_idx = indices[:split_idx]
-    test_idx = indices[split_idx:]
+    train_idx = indices[:args.num_train]
+    test_idx = indices[args.num_train:]
 
     # Helper to index ragged arrays safely
     def split_array(arr, idx):

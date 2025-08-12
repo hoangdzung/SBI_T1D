@@ -500,7 +500,6 @@ class ReplayBG:
             model=model,
             dss=dss,
             twinning_method=twinning_method,
-            fixed_beta=self.fixed_beta,
         )
         replay_results = replayer.replay_scenario()
 

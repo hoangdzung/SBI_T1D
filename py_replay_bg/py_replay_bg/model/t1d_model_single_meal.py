@@ -224,7 +224,7 @@ class T1DModelSingleMeal:
         if self.x0 is not None:
             self.x0[2:5] = [0, 0, 0]
 
-    def sbi_simulate(self, rbg_data: ReplayBGData, theta: np.ndarray, dss: Optional[DSS], duration: Optional[int] = None) -> List[np.ndarray]:
+    def sbi_simulate(self, rbg_data: ReplayBGData, theta: np.ndarray, dss: Optional[DSS], x0: Optional[np.ndarray] = None, sampling: bool = False) -> List[np.ndarray]:
         # TODO: Change this function to efficiently simulate and sample a window of time at the same time
         # Also allow calculate bolus and basal base on meal
         # We might want to sample a meal here if meal sampling is enabled, just like "replay" and return more outputs as simulate method
@@ -287,7 +287,12 @@ class T1DModelSingleMeal:
         mp.Ipb = mp.ka2 / mp.ke * k2
 
         # If initial model conditions are None, set the default initial conditions, i.e., steady-state
-        x[:, 0] = [mp.G0, mp.Xpb, 0, 0, mp.Qgutb, k1, k2, mp.Ipb, mp.G0]
+        if x0 is None:
+            x[:, 0] = [mp.G0, mp.Xpb, 0, 0, mp.Qgutb, k1, k2, mp.Ipb, mp.G0]
+        # otherwise, set the initial model condition appropriately.
+        else:
+            # Scale as --> initial_old:initial_new = k1old:k1new
+            x[:, 0] = x0
         
         # Set the initial glucose value
         G[0] = x[self.nx - 1, 0]
@@ -310,13 +315,11 @@ class T1DModelSingleMeal:
         # Set the initial cgm value if modality is 'replay' and make copies of meal vectors
         CGM[0] = sensors.cgm.measure(x[self.nx - 1, 0], 0)
 
-        if duration is None:
+        if sampling is None:
             duration = self.tsteps // 2
-            
-        if duration > self.tsteps:
-            raise ValueError("Duration must be less than or equal to the total simulation time steps.")
+            stop_k = random.randint(self.tsteps // 2, self.tsteps)
         else:
-            stop_k = random.randint(duration, self.tsteps)
+            duration = stop_k = self.tsteps
         for k in np.arange(1, stop_k):
             if dss is not None:
                 # Meal generation module
