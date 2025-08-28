@@ -136,7 +136,7 @@ def model_step_equations_single_meal(A, I, cho, hour_of_the_day, xkm1, B,
     """
     Internal function that simulates a step of the single-meal model using backward-euler method.
     """
-    xk = xkm1
+    xk = xkm1.copy()
 
     # Compute glucose risk
     risk = 1

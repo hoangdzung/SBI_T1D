@@ -5,7 +5,7 @@ import argparse
 from tqdm import tqdm
 from pathos.multiprocessing import ProcessPool as Pool
 
-from utils import simulate_one, get_prior, get_model_and_rbg_data
+from utils import simulate_one, sample_and_simulate_one, get_prior, get_model_and_rbg_data, split_array, first_half, virginia_bolus_calculator_handler, simglucose_basal_handler
 from sbi.utils import RestrictionEstimator
 from sbi.utils.user_input_checks import process_prior
 from py_replay_bg.dss import DSS
@@ -24,7 +24,10 @@ def main(args):
     restriction_estimator = RestrictionEstimator(prior=prior, decision_criterion=lambda x: x.squeeze())
     proposals = [prior]
     if args.meal_sampling:
-        dss = DSS(bw=model.model_parameters.bw, enable_hypotreatments=True, enable_correction_boluses=True)
+        dss = DSS(bw=model.model_parameters.bw, enable_hypotreatments=True, enable_correction_boluses=False, 
+                  basal_handler=simglucose_basal_handler, bolus_calculator_handler=virginia_bolus_calculator_handler,
+                  basal_handler_params = {'BW': model.model_parameters.bw, 'u2ss': model.model_parameters.u2ss},
+                  bolus_calculator_handler_params = {'BW': model.model_parameters.bw})
     else:
         dss = None
     
@@ -33,20 +36,30 @@ def main(args):
     pbar = tqdm(total=args.num_train + args.num_test, desc="Generating samples", leave=True)
     while len(all_x0s) < args.num_train + args.num_test:
         theta = proposals[-1].sample((args.batch_size,)).to(device)
-        print(theta.shape)
-
-        # Prepare inputs for multiprocessing
-        input_data = [(theta[i].cpu().numpy(), model, rbg_data, dss, True, None) for i in range(args.batch_size)]
 
         # Run simulations in parallel
-        with Pool() as pool:
-            results = pool.map(simulate_one, input_data)
+        if args.meal_sampling:
+            input_data = [(args.patient_info_path, args.fixed_beta, theta[i].cpu().numpy(), dss, None, args.num_hour, True) for i in range(args.batch_size)]
+            simulate_funct = sample_and_simulate_one
+        else:
+            input_data = [(model, rbg_data, theta[i].cpu().numpy(), dss, None, args.num_hour, True) for i in range(args.batch_size)]
+            simulate_funct = simulate_one
+        
+        if args.sequential:
+            results = []
+            for i in tqdm(input_data):
+                result = simulate_funct(i)
+                t, x, cgm, bolus, basal, meal = result
+                results.append(result)
+        else:
+            with Pool() as pool:
+                results = pool.map(simulate_funct, input_data)
 
         # Filter valid results
         batch_fake_x = []
         for i, (t, x, cgm, bolus, basal, meal) in enumerate(results):
             if cgm is not None and cgm.max() <= 400 and cgm.min() >= 40 \
-                and (x >=0).all() and (bolus >=0).all() and (basal >=0).all():
+                and (x[0] >=0).all() and (x[2:] >=0).all() and (bolus >=0).all() and (basal >=0).all():
                 all_ts.append(t)
                 all_x0s.append(x[:, 0])
                 all_thetas.append(theta[i].cpu().numpy())
@@ -57,12 +70,12 @@ def main(args):
                 batch_fake_x.append([1.0])
                 pbar.update(1)
             else:
-                batch_fake_x.append([0.0])  
+                batch_fake_x.append([0.0]) 
         batch_fake_x = torch.tensor(batch_fake_x, device=device)
         print(f"Generated {len(batch_fake_x)} samples in this batch, valid: {batch_fake_x.sum()}")
         
-        if batch_fake_x.sum() == 0:
-            print("No valid samples generated, skipping restriction estimation.")
+        if batch_fake_x.sum() < 2:
+            print("Not enough valid samples generated, skipping restriction estimation.")
             continue
         
         # Sample theta and batch_fake_x such that the number of invalid samples is twice the number of valid samples
@@ -113,19 +126,15 @@ def main(args):
     train_idx = indices[:args.num_train]
     test_idx = indices[args.num_train:]
 
-    # Helper to index ragged arrays safely
-    def split_array(arr, idx):
-        return arr[idx]
-
     # Split datasets
     train_data = {
         "t": split_array(all_ts, train_idx),
         "x0s": split_array(all_x0s, train_idx),
         "thetas": split_array(all_thetas, train_idx),
-        "cgms": split_array(all_cgms, train_idx),
-        "boluses": split_array(all_boluses, train_idx),
-        "basals": split_array(all_basals, train_idx),
-        "meals": split_array(all_meals, train_idx)
+        "cgms": first_half(split_array(all_cgms, train_idx)),
+        "boluses": first_half(split_array(all_boluses, train_idx)),
+        "basals": first_half(split_array(all_basals, train_idx)),
+        "meals": first_half(split_array(all_meals, train_idx)),
     }
 
     test_data = {
@@ -153,7 +162,9 @@ if __name__ == "__main__":
     parser.add_argument("--num_train", type=int, default=5000, help="Number of training samples to save")
     parser.add_argument("--num_test", type=int, default=50, help="Number of test samples to save")
     parser.add_argument("--save_path", type=str, default="./data/simulated", help="Disable CUDA and use CPU even if available")
-    parser.add_argument("--fixed_beta",action="store_true", help="Whether to fix beta as 0")
-    parser.add_argument("--meal_sampling",action="store_true", help="Whether to sample meal")
+    parser.add_argument("--fixed_beta", action="store_true", help="Whether to fix beta as 0")
+    parser.add_argument("--meal_sampling", action="store_true", help="Whether to sample meal")
+    parser.add_argument("--num_hour", type=int, default=24, help="Number of window size in hours for inference")
+    parser.add_argument("--sequential", action="store_true", help="Whether to run simulation sequentially instead of parallel")
     args = parser.parse_args()
     main(args)

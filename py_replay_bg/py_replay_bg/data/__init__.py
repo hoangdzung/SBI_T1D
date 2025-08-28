@@ -136,7 +136,10 @@ class ReplayBGData:
         self.__time_setup(data, model, environment)
 
         # Save idxs
-        self.idx = np.arange(0, data.shape[0])
+        if self.is_per_minute:
+            self.idx = np.arange(0, data.shape[0] // environment.yts)
+        else:
+            self.idx = np.arange(0, data.shape[0])
 
         # Set glucose from given data
         self.glucose = []
@@ -144,6 +147,8 @@ class ReplayBGData:
         # Unpack glucose only if exists
         if 'glucose' in data:
             self.glucose = data.glucose.values.astype(float)
+            if self.is_per_minute:
+                self.glucose = self.glucose[::environment.yts]
             self.glucose_idxs = np.where(~np.isnan(self.glucose))[0]
 
         # Unpack insulin
@@ -192,11 +197,18 @@ class ReplayBGData:
 
         t_m = np.array(data.t.dt.minute.values).astype(int)
         t_h = np.array(data.t.dt.hour.values).astype(int)
-
-        # Set the bolus vector
-        for t in range(data.shape[0]):
-            self.t_hour[(t * environment.yts):((t + 1) * environment.yts)] = t_h[t]
-            self.t_min[(t * environment.yts):((t + 1) * environment.yts)] = np.arange(t_m[t], t_m[t] + environment.yts)
+        # Check if consecutive minutes differ by exactly 1
+        if np.min(np.abs(np.diff(t_m))) == 1:
+            # Simple assignment
+            self.is_per_minute = True
+            self.t_hour = t_h
+            self.t_min = t_m
+        else:
+            self.is_per_minute = False
+            # Do the full loop
+            for t in range(data.shape[0]):
+                self.t_hour[(t * environment.yts):((t + 1) * environment.yts)] = t_h[t]
+                self.t_min[(t * environment.yts):((t + 1) * environment.yts)] = np.arange(t_m[t], t_m[t] + environment.yts)
 
     def __insulin_setup(self,
                         data: pd.DataFrame,
@@ -241,22 +253,28 @@ class ReplayBGData:
 
             self.bolus_data = data.bolus.values
 
-            # Find the boluses
-            b_idx = np.where(data.bolus)[0]
+            if self.is_per_minute:
+                self.bolus = data.bolus.values * model.model_parameters.to_mgkg  # mU/(kg*min)
+                self.bolus_label = data.bolus_label.values
+            else:
+                # Find the boluses
+                b_idx = np.where(data.bolus)[0]
 
-            # Set the bolus vector
-            for i in range(np.size(b_idx)):
-                self.bolus[(b_idx[i] * environment.yts): ((b_idx[i] + 1) * environment.yts)] = data['bolus'][b_idx[i]] * model.model_parameters.to_mgkg  # mU/(kg*min)
-                self.bolus_label[(b_idx[i] * environment.yts): ((b_idx[i] + 1) * environment.yts)] = data['bolus_label'][b_idx[i]]
+                # Set the bolus vector
+                for i in range(np.size(b_idx)):
+                    self.bolus[(b_idx[i] * environment.yts): ((b_idx[i] + 1) * environment.yts)] = data['bolus'][b_idx[i]] * model.model_parameters.to_mgkg  # mU/(kg*min)
+                    self.bolus_label[(b_idx[i] * environment.yts): ((b_idx[i] + 1) * environment.yts)] = data['bolus_label'][b_idx[i]]
 
         if self.basal_source == 'data':
 
             self.basal_data = data.basal.values
-
-            # Set the basal vector
-            for time in range(0, np.size(np.arange(0, model.tsteps, environment.yts))):
-                self.basal[(time * environment.yts): ((time + 1) * environment.yts)] = \
-                    data['basal'][time] * model.model_parameters.to_mgkg  # mU/(kg*min)
+            if self.is_per_minute:
+                self.basal = data.basal.values * model.model_parameters.to_mgkg  # mU/(kg*min)
+            else:
+                # Set the basal vector
+                for time in range(0, np.size(np.arange(0, model.tsteps, environment.yts))):
+                    self.basal[(time * environment.yts): ((time + 1) * environment.yts)] = \
+                        data['basal'][time] * model.model_parameters.to_mgkg  # mU/(kg*min)
 
         if self.basal_source == 'u2ss':
             self.basal[:] = model.model_parameters['u2ss']
@@ -324,44 +342,49 @@ class ReplayBGData:
 
             self.meal_data = data.cho.values
 
-            # Find the meals
-            m_idx = np.where(data.cho)[0]
+            if self.is_per_minute:
+                self.meal = data.cho.values * model.model_parameters.to_mgkg
+                self.meal_announcement = data.cho.values                
+                # print("Warning: meal_type will not be processed since data is in per-minute format.")
+            else:   
+                # Find the meals
+                m_idx = np.where(data.cho)[0]
 
-            # Set the main meal vector
-            for i in range(np.size(m_idx)):
-                self.meal[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)] = data['cho'][m_idx[i]] * model.model_parameters.to_mgkg  # mg/(kg*min)
-                self.meal_announcement[(m_idx[i] * environment.yts)] = data['cho'][m_idx[i]] * environment.yts  # mg/(kg*min)
+                # Set the main meal vector
+                for i in range(np.size(m_idx)):
+                    self.meal[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)] = data['cho'][m_idx[i]] * model.model_parameters.to_mgkg  # mg/(kg*min)
+                    self.meal_announcement[(m_idx[i] * environment.yts)] = data['cho'][m_idx[i]] * environment.yts  # mg/(kg*min)
 
-                if environment.blueprint == 'single-meal':
+                    if environment.blueprint == 'single-meal':
 
-                    # Set the first meal to the MAIN meal (the one that can be delayed by beta) using the label 'M',
-                    # set the other meal inputs to others using the label 'O'
-                    if i == 0:
-                        self.meal_type[(m_idx[i] * environment.yts): ((m_idx[i] + 1) * environment.yts)] = 'M'
-                        self.meal_M[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)] = self.meal[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)]
-                    else:
-                        self.meal_type[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)] = 'O'
-                        self.meal_O[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)] = self.meal[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)]
+                        # Set the first meal to the MAIN meal (the one that can be delayed by beta) using the label 'M',
+                        # set the other meal inputs to others using the label 'O'
+                        if i == 0:
+                            self.meal_type[(m_idx[i] * environment.yts): ((m_idx[i] + 1) * environment.yts)] = 'M'
+                            self.meal_M[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)] = self.meal[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)]
+                        else:
+                            self.meal_type[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)] = 'O'
+                            self.meal_O[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)] = self.meal[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)]
 
-                if environment.blueprint == 'multi-meal':
-                    self.meal_type[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)] = data['cho_label'][m_idx[i]]
+                    if environment.blueprint == 'multi-meal':
+                        self.meal_type[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)] = data['cho_label'][m_idx[i]]
 
-                    if data['cho_label'][m_idx[i]] == 'B':
-                        self.meal_B[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)] = self.meal[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)]
-                    if data['cho_label'][m_idx[i]] == 'L':
-                        self.meal_L[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)] = self.meal[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)]
-                    if data['cho_label'][m_idx[i]] == 'D':
-                        self.meal_D[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)] = self.meal[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)]
-                    if data['cho_label'][m_idx[i]] == 'S':
-                        self.meal_S[(m_idx[i] * environment.yts):(
-                                (m_idx[i] + 1) * environment.yts)] = self.meal[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)]
-                    if data['cho_label'][m_idx[i]] == 'H':
-                        self.meal_H[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)] = self.meal[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)]
+                        if data['cho_label'][m_idx[i]] == 'B':
+                            self.meal_B[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)] = self.meal[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)]
+                        if data['cho_label'][m_idx[i]] == 'L':
+                            self.meal_L[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)] = self.meal[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)]
+                        if data['cho_label'][m_idx[i]] == 'D':
+                            self.meal_D[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)] = self.meal[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)]
+                        if data['cho_label'][m_idx[i]] == 'S':
+                            self.meal_S[(m_idx[i] * environment.yts):(
+                                    (m_idx[i] + 1) * environment.yts)] = self.meal[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)]
+                        if data['cho_label'][m_idx[i]] == 'H':
+                            self.meal_H[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)] = self.meal[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)]
 
-                    if data['cho_label'][m_idx[i]] == 'B2':
-                        self.meal_B2[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)] = self.meal[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)]
-                    if data['cho_label'][m_idx[i]] == 'L2':
-                        self.meal_L2[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)] = self.meal[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)]
-                    if data['cho_label'][m_idx[i]] == 'S2':
-                        self.meal_S2[(m_idx[i] * environment.yts):(
-                                (m_idx[i] + 1) * environment.yts)] = self.meal[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)]
+                        if data['cho_label'][m_idx[i]] == 'B2':
+                            self.meal_B2[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)] = self.meal[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)]
+                        if data['cho_label'][m_idx[i]] == 'L2':
+                            self.meal_L2[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)] = self.meal[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)]
+                        if data['cho_label'][m_idx[i]] == 'S2':
+                            self.meal_S2[(m_idx[i] * environment.yts):(
+                                    (m_idx[i] + 1) * environment.yts)] = self.meal[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)]

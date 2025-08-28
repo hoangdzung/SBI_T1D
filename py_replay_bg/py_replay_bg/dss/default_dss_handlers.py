@@ -1,5 +1,5 @@
 import numpy as np
-
+import warnings
 
 def ada_hypotreatments_handler(
         glucose: np.ndarray,
@@ -86,7 +86,8 @@ def ada_hypotreatments_handler(
         # ...and if there are no CHO intakes in the last 15 minutes, then take an HT
         if time_index >= 15 and not np.any(hypotreatments[(time_index - 15):time_index]):
             ht = 15
-
+        elif glucose[time_index] > 180:
+            ht = -100 # not eating anything
     return ht, dss
 
 

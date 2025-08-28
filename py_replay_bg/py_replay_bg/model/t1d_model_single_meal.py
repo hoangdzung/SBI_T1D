@@ -128,8 +128,14 @@ class T1DModelSingleMeal:
         # self.ts = ts # DEPRECATED -> IT WILL BE ALWAYS = 1
         self.ts = 1
         self.yts = environment.yts  # Measurement sampling time
-        self.t = int((np.array(data.t)[-1].astype(datetime) - np.array(data.t)[0].astype(datetime)) / (
-                60 * 1000000000) + self.yts)
+        is_per_minute = int((np.array(data.t)[1].astype(datetime) - np.array(data.t)[0].astype(datetime)) / (
+                60 * 1000000000)) == 1
+        if is_per_minute:
+            self.t = int((np.array(data.t)[-1].astype(datetime) - np.array(data.t)[0].astype(datetime)) / (
+                    60 * 1000000000) + 1)
+        else:
+            self.t = int((np.array(data.t)[-1].astype(datetime) - np.array(data.t)[0].astype(datetime)) / (
+                    60 * 1000000000) + self.yts)
         self.tsteps = self.t  # / self.ts
         self.tysteps = int(self.t / self.yts)
 
@@ -224,11 +230,13 @@ class T1DModelSingleMeal:
         if self.x0 is not None:
             self.x0[2:5] = [0, 0, 0]
 
-    def sbi_simulate(self, rbg_data: ReplayBGData, theta: np.ndarray, dss: Optional[DSS], x0: Optional[np.ndarray] = None, sampling: bool = False) -> List[np.ndarray]:
-        # TODO: Change this function to efficiently simulate and sample a window of time at the same time
-        # Also allow calculate bolus and basal base on meal
-        # We might want to sample a meal here if meal sampling is enabled, just like "replay" and return more outputs as simulate method
-        
+    def sbi_simulate(self, rbg_data: ReplayBGData, 
+                     theta: np.ndarray, 
+                     dss: Optional[DSS], 
+                     x0: Optional[np.ndarray] = None, 
+                     num_hours: Optional[int] = None,
+                     sampling: bool = False) -> List[np.ndarray]:
+
         cgm = CGMSensors(ts=self.yts)
         sensors = Sensors(cgm=cgm)
         sensors.cgm.connect_new_cgm()
@@ -255,7 +263,7 @@ class T1DModelSingleMeal:
              mp.SI,
              mp.kabs,
              mp.beta) = theta
-            mp.beta = float(mp.beta)
+            mp.beta = int(mp.beta)
         # Enforce constraints
         mp.kgri = mp.kempt
 
@@ -293,7 +301,7 @@ class T1DModelSingleMeal:
         else:
             # Scale as --> initial_old:initial_new = k1old:k1new
             x[:, 0] = x0
-        
+        # print(f"Initial conditions: {x[:, 0]}")
         # Set the initial glucose value
         G[0] = x[self.nx - 1, 0]
 
@@ -315,44 +323,20 @@ class T1DModelSingleMeal:
         # Set the initial cgm value if modality is 'replay' and make copies of meal vectors
         CGM[0] = sensors.cgm.measure(x[self.nx - 1, 0], 0)
 
-        if sampling is None:
-            duration = self.tsteps // 2
-            stop_k = random.randint(self.tsteps // 2, self.tsteps)
+        if sampling:
+            assert self.tsteps == 72 * 60, "Sampling is only supported for 72 hours of data."
+            assert num_hours is not None and num_hours <= 24, "num_hours must be specified and less than or equal to 24 when sampling is True."
+            num_steps = num_hours * 60
+            starting_point = random.randint(0, 24 * 60)
+            end_point = starting_point + num_steps * 2
         else:
-            duration = stop_k = self.tsteps
-        for k in np.arange(1, stop_k):
+            num_steps = end_point = self.tsteps
+        for k in np.arange(1, end_point):
             if dss is not None:
-                # Meal generation module
-                # Call the meal generator function handler
-                ch, ma, t, dss = dss.meal_generator_handler(self.G[0:k],
-                                                            meal[0:k] * mp.to_g,
-                                                            meal_type[0:k],
-                                                            meal_announcement[0:k],
-                                                            hypotreatments[0:k],
-                                                            bolus[0:k] * mp.to_g,
-                                                            basal[0:k] * mp.to_g,
-                                                            rbg_data.t_hour[0:k],
-                                                            k-1,
-                                                            dss,
-                                                            "single_meal")
-                ch_mgkg = ch * mp.to_mgkg
-                # Add the CHO to the input (remember to add the delay)
-                if t == 'M':
-                    if (k+mp.beta.__trunc__()) < self.tsteps:
-                        meal_delayed[k+mp.beta.__trunc__()] = meal_delayed[k+mp.beta.__trunc__()] + ch_mgkg
-                elif t == 'O':
-                    meal_delayed[k] = meal_delayed[k] + ch_mgkg
-
-                # Update the event vectors
-                meal_announcement[k] = meal_announcement[k] + ma
-                meal_type[k] = t
-
-                # Add the CHO to the non-delayed meal vector.
-                meal[k] = meal[k] + ch_mgkg
-                        
+   
                 # Bolus generation module
                 # Call the bolus calculator function handler
-                bo, dss = dss.bolus_calculator_handler(self.G[0:k],
+                bo, dss = dss.bolus_calculator_handler(G[0:k],
                                                             meal_announcement[0:k],
                                                             meal_type[0:k], hypotreatments[0:k],
                                                             bolus[0:k] * mp.to_g,
@@ -371,7 +355,7 @@ class T1DModelSingleMeal:
 
                 # Basal rate generation module
                         # Call the basal rate function handler
-                ba, dss = dss.basal_handler(self.G[0:k],
+                ba, dss = dss.basal_handler(G[0:k],
                                             meal_announcement[0:k],
                                             meal_type[0:k],
                                             hypotreatments[0:k],
@@ -393,7 +377,7 @@ class T1DModelSingleMeal:
                 if dss.enable_hypotreatments:
 
                     # Call the hypotreatment handler
-                    ht, dss = dss.hypotreatments_handler(self.G[0:k],
+                    ht, dss = dss.hypotreatments_handler(G[0:k],
                                                             meal_announcement[0:k],
                                                             meal_type[0:k],
                                                             hypotreatments[0:k],
@@ -411,7 +395,7 @@ class T1DModelSingleMeal:
                 # Correction bolus delivery module if it is enabled
                 if dss.enable_correction_boluses:
                     # Call the correction boluses handler
-                    cb, dss = dss.correction_boluses_handler(self.G[0:k],
+                    cb, dss = dss.correction_boluses_handler(G[0:k],
                                                                 meal_announcement[0:k],
                                                                 meal_type[0:k],
                                                                 hypotreatments[0:k],
@@ -455,6 +439,7 @@ class T1DModelSingleMeal:
                                                     mp.alpha,
                                                     self.previous_Ra[k-1])
 
+            G[k] = x[self.nx - 1, k]
             # Get the cgm
             if np.mod(k, sensors.cgm.ts) == 0:
                 if np.mod(k+sensors.cgm.t_offset, sensors.cgm.max_lifetime) == 0:
@@ -464,13 +449,23 @@ class T1DModelSingleMeal:
                 CGM[int(k / sensors.cgm.ts)] = sensors.cgm.measure(x[self.nx - 1, k], (k - sensors.cgm.connected_at) / (24 * 60))
 
         # TODO: add vo2
-        return [rbg_data.t_data[-duration//sensors.cgm.ts:],
-                x[:,-duration:], 
-                CGM[-duration//sensors.cgm.ts:], 
-                bolus[-duration:][::sensors.cgm.ts] * mp.to_g,
-                basal[-duration:][::sensors.cgm.ts] * mp.to_g,
-                meal[-duration:][::sensors.cgm.ts] * mp.to_g,
-            ]
+        if sampling:
+            return [rbg_data.t_data[end_point - 2 * num_steps : end_point],
+                    x[:,end_point - 2 * num_steps: end_point], 
+                    CGM[end_point//sensors.cgm.ts - 2 * num_steps//sensors.cgm.ts : end_point//sensors.cgm.ts], 
+                    bolus[end_point - 2 * num_steps : end_point] * mp.to_g,
+                    basal[end_point - 2 * num_steps : end_point] * mp.to_g,
+                    meal[end_point - 2 * num_steps : end_point] * mp.to_g,
+                ]
+
+        else:
+            return [rbg_data.t_data,
+                    x, 
+                    CGM, 
+                    bolus * mp.to_g,
+                    basal * mp.to_g,
+                    meal * mp.to_g,
+                ]
         
             
     def simulate(self,

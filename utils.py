@@ -10,6 +10,9 @@ import pandas as pd
 import numpy as np 
 from copy import deepcopy
 from pathos.multiprocessing import ProcessPool as Pool
+import random
+from datetime import datetime, timedelta
+import warnings
 
 N_PARAMS=9
 N_PARAMS_HAT=18
@@ -121,16 +124,26 @@ def get_prior(VG: float = 1.45,
     return custom_prior
 
 def simulate_one(args):
-    theta_np, model, rbg_data, dss, sampling, x0 = args
+    model, *params = args
+    try:
+        return model.sbi_simulate(*params)
+    except Exception as e:
+        print("Simulate error", e)
+        return (None,) * 6
+
+def sample_and_simulate_one(args):
+    patient_info_path, fixed_beta, *params = args
+    new_df = sample_meals_for_3_days(minute_interval=1)
+    model, rbg_data = get_model_and_rbg_data(new_df, patient_info_path, fixed_beta=fixed_beta,
+                                            rbg_data_kwargs={"bolus_source": "dss", "basal_source": "dss"})
     # try:
-    t, x, cgm, bolus, basal, meal = model.sbi_simulate(rbg_data, theta_np, dss, x0, sampling)
+    return model.sbi_simulate(rbg_data, *params)
     # except Exception as e:
     #     print("Simulate error", e)
-    #     t, x, cgm, bolus, basal, meal = None, None, None, None, None, None
-        
-    return t, x, cgm, bolus, basal, meal
+    #     return (None,) * 6
 
-def get_model_and_rbg_data(data, patient_info_path, glucose_sequence=None, cho=None, fixed_beta=False):
+
+def get_model_and_rbg_data(data, patient_info_path, glucose_sequence=None, cho=None, fixed_beta=False, rbg_data_kwargs={}):
     if type(data) is str:
         data = pd.read_csv(data)
         data.t = pd.to_datetime(data['t'])
@@ -151,11 +164,25 @@ def get_model_and_rbg_data(data, patient_info_path, glucose_sequence=None, cho=N
     # Environment and model setup
     env = Environment(save_name='ori', save_folder='./')
     model = T1DModelSingleMeal(data=data, bw=bw, u2ss=u2ss, environment=env, fixed_beta=fixed_beta)
-    rbg_data = ReplayBGData(data=data, model=model, environment=env)
+    rbg_data = ReplayBGData(data=data, model=model, environment=env, **rbg_data_kwargs)
     return model, rbg_data
 
 def create_patient_df(t, glucose, cho, bolus, basal):
     # Create empty label columns
+
+    n = len(bolus)
+
+    if len(glucose) != n:
+        # Assume glucose is measured every k minutes
+        k = n // len(glucose)
+        if n % len(glucose) != 0:
+            raise ValueError("Glucose length must divide evenly into bolus length.")
+
+        # Expand glucose: each reading followed by k-1 NaNs
+        glucose_extended = np.full(n, np.nan, dtype=float)
+        glucose_extended[::k] = glucose
+        glucose = glucose_extended
+
     bolus_label = np.full_like(bolus, np.nan, dtype=float)
     cho_label = np.full_like(cho, np.nan, dtype=float)
 
@@ -171,3 +198,267 @@ def create_patient_df(t, glucose, cho, bolus, basal):
     })
 
     return df
+
+
+def simglucose_basal_handler(
+    glucose: np.ndarray,
+    meal_announcement: np.ndarray,
+    meal_type: np.ndarray,
+    hypotreatments: np.ndarray,
+    bolus: np.ndarray,
+    basal: np.ndarray,
+    time: np.ndarray,
+    time_index: int,
+    dss: object
+    ) -> tuple[float, object]:
+
+    # If G < 70...
+    if glucose[time_index] < 70:
+        # ...set basal rate to 0
+        b = 0
+    else:
+        basal_handler_params = getattr(dss, 'basal_handler_params', {})
+        u2ss = basal_handler_params.get('u2ss', 1.43)
+        b = u2ss / 6
+    return b, dss
+
+
+def simglucose_bolus_calculator_handler(
+        glucose: np.ndarray,
+        meal_announcement: np.ndarray,
+        meal_type: np.ndarray,
+        hypotreatments: np.ndarray,
+        bolus: np.ndarray,
+        basal: np.ndarray,
+        time: np.ndarray,
+        time_index: int,
+        dss: object
+        ) -> tuple[float, object]:
+
+    b = 0
+
+    if meal_announcement[time_index] > 0:
+        bolus_params = getattr(dss, 'bolus_calculator_handler_params', {})
+        cr = bolus_params.get('cr', 10)
+        cf = bolus_params.get('cf', 40)
+        gt = bolus_params.get('gt', 120)
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", category=RuntimeWarning)
+            try:
+                b = np.max([
+                    0,
+                    meal_announcement[time_index] / cr + (glucose[time_index] - gt) / cf
+                ])
+            except RuntimeWarning as w:
+                raise RuntimeError(
+                    f"Bolus calculation warning at time_index={time_index}: {w}\n"
+                    f"(meal={meal_announcement[time_index]}, glucose={glucose[time_index]}, "
+                    f"cr={cr}, cf={cf}, gt={gt})"
+                ) from w
+        # print(f"Simglucose bolus: Meal at {time[time_index]}: carbs={meal_announcement[time_index]}, glucose={glucose[time_index]}, bolus={b}")
+
+    return b, dss
+
+# https://scispace.com/pdf/design-and-validation-of-an-open-source-closed-loop-testbed-3vn3wol7.pdf
+def virginia_bolus_calculator_handler(
+        glucose: np.ndarray,
+        meal_announcement: np.ndarray,
+        meal_type: np.ndarray,
+        hypotreatments: np.ndarray,
+        bolus: np.ndarray,
+        basal: np.ndarray,
+        time: np.ndarray,
+        time_index: int,
+        dss: object
+        ) -> tuple[float, object]:
+    """
+    Implements the default bolus calculator formula: B = CHO/CR + (GC-GT)/CF - IOB
+
+    Parameters
+    ----------
+    glucose: np.ndarray
+        An array vector as long the simulation length containing all the simulated glucose concentrations (mg/dl)
+        up to time_index. The values after time_index should be ignored.
+    meal_announcement: np.ndarray
+        An array vector as long the simulation length containing all the meal announcements (g) up to time_index.
+        The values after time_index should be ignored.
+    meal_type: np.ndarray
+        An array of strings as long the simulation length containing the type of each meal.
+        If blueprint is `single-meal`, labels can be:
+            - `M`: main meal
+            - `O`: other meal
+        If blueprint is `multi-meal`, labels can be:
+            - `B`: breakfast
+            - `L`: lunch
+            - `D`: dinner
+            - `S`: snack
+            - `H`: hypotreatment
+        The values after time_index should be ignored.
+    hypotreatments: np.ndarray
+        An array vector as long the simulation length containing all the hypotreatment intakes (g/min) up to time_index.
+        If the blueprint is single meal, hypotreatments will contain only the hypotreatments generated by this function
+        during the simulation. If the blueprint is multi-meal, hypotreatments will ALSO contain the hypotreatments
+        already present in the given data that labeled as such. The values after time_index should be ignored.
+    bolus: np.ndarray
+        An array vector as long the simulation length containing all the insulin boluses (U/min) up to time_index.
+        The values after time_index should be ignored.
+    basal: np.ndarray
+        An array vector as long the simulation length containing all the insulin basal (U/min) up to time_index.
+        The values after time_index should be ignored.
+    time: np.ndarray
+        An array vector as long the simulation length containing the time corresponding to the current step (hours) up
+        to time_index. The values after time_index should be ignored.
+    time_index: int
+        The index corresponding to the previous simulation step of the replay simulation.
+    dss: DSS
+        An object that represents the hyperparameters of the integrated decision support system.
+
+    Returns
+    -------
+    b: float
+        The bolus insulin rate to administer at time[time_index+1].
+    dss: DSS
+        An object that represents the hyperparameters of the integrated decision support system.
+        dss is also an output since it contains bolus_calculator_handler_params that beside being a
+        dict that contains the parameters to pass to  this function, it also serves as memory area.
+        It is possible to store values inside it and the standard_bolus_calculator_handler function will be able
+        to access to them in the next call of the function.
+
+    Raises
+    ------
+    None
+
+    See Also
+    --------
+    None
+
+    Examples
+    --------
+    None
+    """
+
+    b = 0
+
+    # If a meal is announced...
+    if meal_announcement[time_index] > 0:
+
+        # compute iob
+        ts = 5
+
+        k1 = 0.0173
+        k2 = 0.0116
+        k3 = 6.73
+
+        iob_6h_curve = np.zeros(shape=(360,))
+
+        for t in range(0, 360):
+            iob_6h_curve[t] = 1 - 0.75 * ((- k3 / (k2 * (k1 - k2)) * (np.exp(-k2 * t / 0.75) - 1) + k3 / (
+                        k1 * (k1 - k2)) * (np.exp(-k1 * t / 0.75) - 1)) / 2.4947e4)
+        iob_6h_curve = iob_6h_curve[ts::ts]
+
+        iob = np.convolve(bolus, iob_6h_curve)
+        iob = iob[bolus.shape[0] - 1]
+
+        # get params
+        bolus_params = getattr(dss, 'bolus_calculator_handler_params', {})
+        if 'bw' in bolus_params:
+            tdd = 0.55 * bolus_params['bw']  # total daily dose
+            cr = 450 / tdd
+            cf = 1700 / tdd
+        else:
+            cr = bolus_params['cr'] if 'cr' in bolus_params else 10
+            cf = bolus_params['cf'] if 'cf' in bolus_params else 40
+        gt = bolus_params['gt'] if 'gt' in bolus_params else 120
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", category=RuntimeWarning)
+            try:
+                # ...give a bolus
+                b = np.max([0, meal_announcement[time_index] / cr + (glucose[time_index] - gt) / cf - iob])
+            except RuntimeWarning as w:
+                raise RuntimeError(
+                    f"Bolus calculation warning at time_index={time_index}: {w}\n"
+                    f"(meal={meal_announcement[time_index]}, glucose={glucose[time_index]}, "
+                    f"cr={cr}, cf={cf}, gt={gt})"
+                ) from w
+        # print(f"Standard bolus: Meal at {time[time_index]}: carbs={meal_announcement[time_index]}, glucose={glucose[time_index]}, bolus={b}")
+
+    return b, dss
+
+def sample_meals_for_3_days(minute_interval=5):
+    def random_time(hour_range, minute_interval=minute_interval):
+        hour = random.randint(hour_range[0], hour_range[1])
+        minute = random.randint(0, (60 // minute_interval) - 1) * minute_interval
+        return f"{hour:02d}:{minute:02d}:00"  # seconds fixed to 00
+    
+    # Store only meals first
+    meal_entries = {}
+    
+    for day_offset in range(3):
+        date = datetime.today().date() + timedelta(days=day_offset)
+        
+        meals = [
+            {"time": random_time((6, 9)),  "carbs": random.randint(5, 10), "label": "B"},
+            {"time": random_time((11, 14)), "carbs": random.randint(10, 20), "label": "L"},
+            {"time": random_time((17, 21)), "carbs": random.randint(10, 20), "label": "D"}
+        ]
+        
+        # Random snacks
+        for _ in range(random.randint(0, 0)):
+            meals.append({
+                "time": random_time((8, 22)),
+                "carbs": random.randint(5, 10),
+                "label": "S"
+            })
+        
+        # Store in dictionary keyed by datetime
+        for meal in meals:
+            dt = datetime.strptime(f"{date} {meal['time']}", "%Y-%m-%d %H:%M:%S")
+            meal_entries[dt] = {
+                "cho": meal["carbs"],
+                "cho_label": meal["label"]
+            }
+    
+    # Build full 5-minute frequency index for 3 days
+    start_time = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
+    end_time = start_time + timedelta(days=3) - timedelta(minutes=minute_interval)
+    full_index = pd.date_range(start=start_time, end=end_time, freq=f"{minute_interval:d}min")
+    
+    # Create dataframe with default values
+    df = pd.DataFrame({
+        "t": full_index,
+        "cho": 0,
+        "cho_label": pd.Series([np.nan] * len(full_index), dtype="object")     # force object dtype
+
+    })
+    
+    # Fill in meal entries
+    for t, vals in meal_entries.items():
+        mask = df["t"] == t
+        for k, v in vals.items():
+            df.loc[mask, k] = v
+    
+    return df
+
+# Helper to index ragged arrays safely
+def split_array(arr, idx):
+    return arr[idx]
+
+def first_half(arr):
+    """Return the first half of elements (works for 1D or 2D arrays)."""
+    if arr.ndim == 1:  # 1D array
+        return arr[: arr.shape[0] // 2]
+    elif arr.ndim == 2:  # 2D array
+        return arr[:, : arr.shape[1] // 2]
+    else:
+        raise ValueError("Input must be 1D or 2D array")
+    
+def second_half(arr):
+    """Return the second half of elements (works for 1D or 2D arrays)."""
+    if arr.ndim == 1:  # 1D array
+        return arr[-arr.shape[0] // 2:]
+    elif arr.ndim == 2:  # 2D array
+        return arr[:, -arr.shape[1] // 2:]
+    else:
+        raise ValueError("Input must be 1D or 2D array")
