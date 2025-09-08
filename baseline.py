@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from multiprocessing import freeze_support
 from py_replay_bg.py_replay_bg import ReplayBG
-from utils import create_patient_df, first_half
+from utils import create_patient_df, first_half, parse_kv
 
 def main(args):
     freeze_support()
@@ -45,7 +45,7 @@ def main(args):
         seed=1,
         verbose=True,
         plot_mode=False,
-        fixed_beta=True,
+        fixed_values=dict(args.fixed_values),
     )
 
     # Step 1: Twinning
@@ -83,7 +83,9 @@ if __name__ == "__main__":
     parser.add_argument("--method", type=str, required=True, choices=["map", "mcmc"],
                         help="Twinning method to use: 'map' or 'mcmc'.")
     parser.add_argument("--test_data", type=str, default='./data/simulated/test_data.pt', help="Path to testing theta .pt file.")
+    parser.add_argument("--noise_meal", action="store_true", help="Whether to add noise to meal announcements.")
     parser.add_argument("--save_folder", type=str, default='./', help="Path to save results.")
+    parser.add_argument('--fixed_values', type=parse_kv, nargs='+', help='Parameters to be fixed')
 
     args = parser.parse_args()
     main(args)

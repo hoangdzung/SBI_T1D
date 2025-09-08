@@ -8,7 +8,8 @@ import numpy as np
 @njit
 def log_prior_single_meal(
         VG: float,
-        theta: np.ndarray
+        theta: np.ndarray,
+        unknown_parameters: list
 ):
     """
     Internal function that computes the log prior of unknown parameters.
@@ -38,34 +39,46 @@ def log_prior_single_meal(
     None
     """
 
-    # unpack the model parameters
-    if len(theta) == 9:
-        Gb, SG, p2, ka2, kd, kempt, SI, kabs, beta = theta
-    else:
-        Gb, SG, p2, ka2, kd, kempt, SI, kabs = theta
-    # compute each log prior
-    logprior_SI = log_gamma(SI * VG, 3.3, 1 / 5e-4)
-    logprior_p2 = log_norm(np.sqrt(p2), mu=0.11, sigma=0.004) if 0 < p2 < 1 else -np.inf
-    logprior_Gb = log_norm(Gb, mu=119.13, sigma=7.11) if 70 <= Gb <= 180 else -np.inf
-    logprior_SG = log_lognorm(SG, mu=-3.8, sigma=0.5) if 0 < SG < 1 else -np.inf
-    logprior_ka2 = log_lognorm(ka2, mu=-4.2875, sigma=0.4274) if 0 < ka2 < kd and ka2 < 1 else -np.inf
-    logprior_kd = log_lognorm(kd, mu=-3.5090, sigma=0.6187) if 0 < ka2 < kd and kd < 1 else -np.inf
-    logprior_kempt = log_lognorm(kempt, mu=-1.9646, sigma=0.7069) if 0 < kempt < 1 else -np.inf
-    logprior_kabs = log_lognorm(kabs, mu=-5.4591,
-                                sigma=1.4396) if kempt >= kabs and 0 < kabs < 1 else -np.inf
+    # Initialize all parameters with defaults
+    logprior = 0.0
+    # Extract values from theta and compute log prior in one loop
+    for i in range(len(unknown_parameters)):
+        param_name = unknown_parameters[i]
+        value = theta[i]
 
-    logprior_beta = 0 if 0 <= beta <= 60 else -np.inf
+        if param_name == "Gb":
+            Gb = value
+            # logprior += log_norm(Gb, mu=119.13, sigma=7.11) if 70 <= Gb <= 180 else -np.inf
+            logprior += log_norm(Gb, mu=141.865, sigma=8.70) if 70 <= Gb <= 180 else -np.inf
+        elif param_name == "SG":
+            SG = value
+            logprior += log_lognorm(SG, mu=-3.8, sigma=0.5) if 0 < SG < 1 else -np.inf
+        elif param_name == "p2":
+            p2 = value
+            logprior += log_norm(np.sqrt(p2), mu=0.11, sigma=0.004) if 0 < p2 < 1 else -np.inf
+        elif param_name == "ka2":
+            ka2 = value
+            # logprior += log_lognorm(ka2, mu=-4.2875, sigma=0.4274) if 0 < ka2 < 1 else -np.inf
+            logprior += log_lognorm(ka2, mu=-4.09676, sigma=0.46674) if 0 < ka2 < 1 else -np.inf
+        elif param_name == "kd":
+            kd = value
+            # logprior += log_lognorm(kd, mu=-3.5090, sigma=0.6187) if 0 < kd < 1 else -np.inf
+            logprior += log_lognorm(kd, mu=-4.12588, sigma=0.15242) if 0 < kd < 1 else -np.inf
+        elif param_name == "kempt":
+            kempt = value
+            logprior += log_lognorm(kempt, mu=-1.9646, sigma=0.7069) if 0 < kempt < 1 else -np.inf
+        elif param_name == "SI":
+            SI = value
+            logprior += log_gamma(SI * VG, 3.3, 1 / 5e-4)
+        elif param_name == "kabs":
+            kabs = value
+            # logprior += log_lognorm(kabs, mu=-5.4591, sigma=1.4396) if kempt >= kabs and 0 < kabs < 1 else -np.inf
+            logprior += log_lognorm(kabs, mu=-1.99872, sigma=1.50196) if 0 < kabs < 1 else -np.inf
+        elif param_name == "beta":
+            beta = value
+            logprior += 0.0 if 0 <= beta <= 60 else -np.inf
 
-    # Sum everything and return the value
-    return (logprior_SI +
-            logprior_Gb +
-            logprior_SG +
-            logprior_p2 +
-            logprior_ka2 +
-            logprior_kd +
-            logprior_kempt +
-            logprior_kabs +
-            logprior_beta)
+    return logprior
 
 @njit
 def log_prior_single_meal_exercise(

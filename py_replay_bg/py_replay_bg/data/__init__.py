@@ -87,7 +87,8 @@ class ReplayBGData:
                  environment: Environment,
                  bolus_source: str = 'data',
                  basal_source: str = 'data',
-                 cho_source: str = 'data'):
+                 cho_source: str = 'data',
+                 noise_meal_announcements: bool = False):
         """
         Constructs all the necessary attributes for the Visualizer object.
 
@@ -131,6 +132,7 @@ class ReplayBGData:
         self.basal_source = basal_source
         self.bolus_source = bolus_source
         self.cho_source = cho_source
+        self.noise_meal_announcements = noise_meal_announcements
 
         # From the time retain only the hour since is the only thing actually needed during the simulation
         self.__time_setup(data, model, environment)
@@ -154,6 +156,9 @@ class ReplayBGData:
         # Unpack insulin
         self.__insulin_setup(data, model, environment)
         self.__meal_setup(data, model, environment)
+        if self.noise_meal_announcements:
+            self.original_meal_announcements = self.meal_announcement.copy()
+            self.__noisy_meal_announcements()
 
         # TODO: manage exercise
         self.exercise = []
@@ -388,3 +393,36 @@ class ReplayBGData:
                         if data['cho_label'][m_idx[i]] == 'S2':
                             self.meal_S2[(m_idx[i] * environment.yts):(
                                     (m_idx[i] + 1) * environment.yts)] = self.meal[(m_idx[i] * environment.yts):((m_idx[i] + 1) * environment.yts)]
+
+
+    def __noisy_meal_announcements(self, p_noise=0.8, p_forget=0.4, noise_level=0.2, rng=None):
+        """
+        Add noise to meal announcements.
+
+        Parameters
+        ----------
+        p_noise : float
+            Probability to perturb a nonzero meal.
+        p_forget : float
+            Probability to forget a nonzero meal (set to 0).
+        noise_level : float
+            Maximum relative noise (e.g. 0.05 = ±5%).
+        rng : np.random.Generator or None
+            Random generator for reproducibility.
+
+        Returns
+        -------
+        np.ndarray
+            Noisy meal array.
+        """
+        if rng is None:
+            rng = np.random.default_rng()
+
+        for i, m in enumerate(self.meal_announcement):
+            if m > 0:
+                if rng.random() < p_noise:
+                    if rng.random() < p_forget:
+                        self.meal_announcement[i] = 0.0
+                    else:
+                        factor = 1 + rng.uniform(0, noise_level)
+                        self.meal_announcement[i] = max(0.0, m * factor)  # ensure nonnegative

@@ -54,7 +54,7 @@ class ReplayBG:
     def __init__(self, save_folder: str, blueprint: str = 'single_meal',
                  yts: int = 5, exercise: bool = False,
                  seed: int = 1,
-                 plot_mode: bool = True, verbose: bool = True, fixed_beta: bool = False,
+                 plot_mode: bool = True, verbose: bool = True, fixed_values: dict = {}
                  ):
         """
         Constructs all the necessary attributes for the ReplayBG object.
@@ -100,7 +100,7 @@ class ReplayBG:
         Cappon et al., "ReplayBG: a methodology to identify a personalized model from type 1 diabetes data and simulate
         glucose concentrations to assess alternative therapies", IEEE Transactions on Biomedical Engineering, 2023.
         """
-        self.fixed_beta = fixed_beta
+        self.fixed_values = fixed_values
         
         # Validate input
         InputValidatorInit(
@@ -124,7 +124,7 @@ class ReplayBG:
              extended: bool = False, find_start_guess_first: bool = False,
              n_steps: int = 50000, save_chains: bool = False,
              u2ss: float | None = None, x0: np.ndarray | None = None, previous_data_name: str | None = None,
-             parallelize: bool = False, n_processes: int | None = None,
+             parallelize: bool = False, n_processes: int | None = None, noise_meal_announcements: bool = False
     ) -> None:
         """
         Runs ReplayBG twinning procedure.
@@ -216,7 +216,7 @@ class ReplayBG:
                                        previous_data_name=previous_data_name,
                                        twinning_method=twinning_method,
                                        environment=self.environment,
-                                       is_twin=True, fixed_beta=self.fixed_beta)
+                                       is_twin=True, fixed_values=self.fixed_values)
         else:
             model = T1DModelMultiMeal(data=data, bw=bw, u2ss=u2ss, x0=x0,
                                       previous_data_name=previous_data_name,
@@ -225,7 +225,7 @@ class ReplayBG:
                                       is_twin=True, extended=extended)
 
         # Unpack data to optimize performance during simulation
-        rbg_data = ReplayBGData(data=data, model=model, environment=self.environment)
+        rbg_data = ReplayBGData(data=data, model=model, environment=self.environment, noise_meal_announcements=noise_meal_announcements,)
 
         # Initialize start_guess
         start_guess = None
@@ -461,7 +461,7 @@ class ReplayBG:
                                        previous_data_name=previous_data_name,
                                        twinning_method=twinning_method,
                                        environment=self.environment,
-                                       is_twin=False, fixed_beta=self.fixed_beta)
+                                       is_twin=False, fixed_values=self.fixed_values)
         else:
             model = T1DModelMultiMeal(data=data, bw=bw, u2ss=u2ss, x0=x0,
                                       previous_data_name=previous_data_name,

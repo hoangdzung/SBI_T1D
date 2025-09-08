@@ -96,7 +96,7 @@ class T1DModelSingleMeal:
                  environment: Environment | None = None,
                  twinning_method: str = 'mcmc',
                  is_twin: bool = False,
-                 fixed_beta: bool = False,
+                 fixed_values: dict = {},
                  ):
         """
         Constructs all the necessary attributes for the Model object.
@@ -141,39 +141,55 @@ class T1DModelSingleMeal:
 
         # Model dimensionality
         self.nx = 9
-
+        self.fixed_values = fixed_values
+        
         # Model parameters
         self.model_parameters = ModelParametersT1DSingleMeal(data, bw, u2ss)
-
+        
         # Unknown parameters
-        self.unknown_parameters = ['Gb', 'SG', 'p2', 'ka2', 'kd', 'kempt']
-
-        # initial guess for unknown parameter
-        self.start_guess = np.array(
-            [self.model_parameters.Gb, self.model_parameters.SG, self.model_parameters.p2,
-             self.model_parameters.ka2, self.model_parameters.kd, self.model_parameters.kempt])
-
+        self.unknown_parameters = []
+        self.start_guess = []
         # initial guess for the SD of each parameter
-        self.start_guess_sigma = np.array([1, 5e-4, 1e-3, 1e-3, 1e-3, 1e-3])
-        self.fixed_beta = fixed_beta
+        self.start_guess_sigma = []
+        unknown_parameter_guess_sigma = {'Gb': 1, 'SG': 5e-4, 'p2': 1e-3, 'ka2': 1e-3, 'kd': 1e-3, 'kempt': 1e-3}
+        for param, start_guess_sigma in unknown_parameter_guess_sigma.items():
+            if param not in fixed_values:
+                self.unknown_parameters.append(param)
+                self.start_guess.append(getattr(self.model_parameters, param))
+                self.start_guess_sigma.append(start_guess_sigma)
+            else:
+                self.model_parameters.__setattr__(param, fixed_values[param])
+        self.start_guess = np.array(self.start_guess)
+        self.start_guess_sigma = np.array(self.start_guess_sigma)
+        self.is_twin = is_twin
+
         if is_twin:
             # Attach SI
-            self.pos_SI = self.start_guess.shape[0]
-            self.unknown_parameters = np.append(self.unknown_parameters, 'SI')
-            self.start_guess = np.append(self.start_guess, self.model_parameters.SI)
-            self.start_guess_sigma = np.append(self.start_guess_sigma, 1e-6)
-            # Attach kabs
-            self.pos_kabs = self.start_guess.shape[0]
-            self.unknown_parameters = np.append(self.unknown_parameters, 'kabs')
-            self.start_guess = np.append(self.start_guess, self.model_parameters.kabs)
-            self.start_guess_sigma = np.append(self.start_guess_sigma, 1e-3)
-            if not fixed_beta:
+            if 'SI' not in fixed_values:
+                self.pos_SI = self.start_guess.shape[0]
+                self.unknown_parameters = np.append(self.unknown_parameters, 'SI')
+                self.start_guess = np.append(self.start_guess, self.model_parameters.SI)
+                self.start_guess_sigma = np.append(self.start_guess_sigma, 1e-6)
+            else:
+                self.model_parameters.SI = fixed_values['SI']
+            if 'kabs' not in fixed_values:
+                # Attach kabs
+                self.pos_kabs = self.start_guess.shape[0]
+                self.unknown_parameters = np.append(self.unknown_parameters, 'kabs')
+                self.start_guess = np.append(self.start_guess, self.model_parameters.kabs)
+                self.start_guess_sigma = np.append(self.start_guess_sigma, 1e-3)
+            else:
+                self.model_parameters.kabs = fixed_values['kabs']
+            
+            if 'beta' not in fixed_values:
                 # Attach beta
                 self.pos_beta = self.start_guess.shape[0]
                 self.unknown_parameters = np.append(self.unknown_parameters, 'beta')
                 self.start_guess = np.append(self.start_guess, self.model_parameters.beta)
-                self.start_guess_sigma = np.append(self.start_guess_sigma, 0.5)
-
+                self.start_guess_sigma = np.append(self.start_guess_sigma, 0.5) 
+            else:
+                self.model_parameters.beta = fixed_values['beta']
+                
         # Exercise
         self.exercise = environment.exercise
 
@@ -244,26 +260,10 @@ class T1DModelSingleMeal:
         mp = copy.deepcopy(self.model_parameters)
           
         # Set model parameters to current guess
-        if self.fixed_beta:
-            (mp.Gb,
-             mp.SG,
-             mp.p2,
-             mp.ka2,
-             mp.kd,
-             mp.kempt,
-             mp.SI,
-             mp.kabs) = theta
-        else:
-            (mp.Gb,
-             mp.SG,
-             mp.p2,
-             mp.ka2,
-             mp.kd,
-             mp.kempt,
-             mp.SI,
-             mp.kabs,
-             mp.beta) = theta
-            mp.beta = int(mp.beta)
+        assert not self.is_twin or len(theta) == len(self.unknown_parameters), f"theta length {len(theta)} does not match number of unknown parameters {len(self.unknown_parameters)}"
+        for i, param in enumerate(self.unknown_parameters):
+            setattr(mp, param, theta[i])    
+        mp.beta = int(mp.beta)
         # Enforce constraints
         mp.kgri = mp.kempt
 
@@ -853,25 +853,9 @@ class T1DModelSingleMeal:
         """
 
         # Set model parameters to current guess
-        if self.fixed_beta:
-            (self.model_parameters.Gb,
-             self.model_parameters.SG,
-             self.model_parameters.p2,
-             self.model_parameters.ka2,
-             self.model_parameters.kd,
-             self.model_parameters.kempt,
-             self.model_parameters.SI,
-             self.model_parameters.kabs) = theta
-        else:
-            (self.model_parameters.Gb,
-             self.model_parameters.SG,
-             self.model_parameters.p2,
-             self.model_parameters.ka2,
-             self.model_parameters.kd,
-             self.model_parameters.kempt,
-             self.model_parameters.SI,
-             self.model_parameters.kabs,
-             self.model_parameters.beta) = theta
+        assert not self.is_twin or len(theta) == len(self.unknown_parameters), f"theta length {len(theta)} does not match number of unknown parameters {len(self.unknown_parameters)}"
+        for i, param in enumerate(self.unknown_parameters):
+            setattr(self.model_parameters, param, theta[i])  
 
         # Enforce constraints
         self.model_parameters.kgri = self.model_parameters.kempt
@@ -952,7 +936,7 @@ class T1DModelSingleMeal:
         --------
         None
         """
-        p = log_prior_single_meal(self.model_parameters.VG, theta)
+        p = log_prior_single_meal(self.model_parameters.VG, theta, unknown_parameters=self.unknown_parameters)
         return -np.inf if p == -np.inf else p + self.__log_likelihood(theta, rbg_data)
 
     def check_realization(
@@ -984,7 +968,7 @@ class T1DModelSingleMeal:
         --------
         None
         """
-        return log_prior_single_meal(self.model_parameters.VG, theta) != -np.inf
+        return log_prior_single_meal(self.model_parameters.VG, theta, self.unknown_parameters) != -np.inf
 
     def check_realization_exercise(
             self,
